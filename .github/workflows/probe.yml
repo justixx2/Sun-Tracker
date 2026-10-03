@@ -1,0 +1,46 @@
+name: Temporary API probe
+on:
+  push:
+    branches: [claude/sunny-weather-location-finder-keggwf]
+    paths: [.github/workflows/probe.yml]
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - shell: python
+        run: |
+          import json, urllib.request, statistics as st
+          LAT, LON, DAY = 54.02, 23.97, "2026-10-05"
+          def get(url):
+              with urllib.request.urlopen(url, timeout=60) as r: return json.load(r)
+          F = "https://api.open-meteo.com/v1/forecast"
+          E = "https://ensemble-api.open-meteo.com/v1/ensemble"
+          base = f"latitude={LAT}&longitude={LON}&timezone=auto&forecast_days=7"
+          print("=== Deterministic models, Mon 5 Oct, Druskininkai ===")
+          for m in ["best_match","ecmwf_ifs025","ecmwf_aifs025_single","icon_seamless","gfs_seamless","meteofrance_seamless","ukmo_seamless","knmi_seamless","dmi_seamless","metno_seamless"]:
+              try:
+                  d = get(f"{F}?{base}&models={m}&daily=sunshine_duration,daylight_duration,cloud_cover_mean,precipitation_sum&hourly=cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high")
+                  i = d["daily"]["time"].index(DAY); dd = d["daily"]
+                  h = d["hourly"]; idx = [k for k,t in enumerate(h["time"]) if t.startswith(DAY) and 9 <= int(t[11:13]) <= 16]
+                  avg = lambda key: round(st.mean([h[key][k] for k in idx if h[key][k] is not None]),0) if any(h[key][k] is not None for k in idx) else None
+                  sun = dd["sunshine_duration"][i]; dl = dd["daylight_duration"][i]
+                  print(f"{m:24s} sun {sun/3600 if sun is not None else None!s:>6.6}h ({round(100*sun/dl) if sun is not None else '-'}%)  cloud mean {dd['cloud_cover_mean'][i]}  9-16h cloud {avg('cloud_cover')} low {avg('cloud_cover_low')} mid {avg('cloud_cover_mid')} high {avg('cloud_cover_high')}  rain {dd['precipitation_sum'][i]}")
+              except Exception as e:
+                  print(f"{m:24s} ERROR {e}")
+          print()
+          print("=== Ensembles, Mon 5 Oct ===")
+          for m in ["ecmwf_ifs025","ecmwf_aifs025","icon_seamless","gfs025"]:
+              try:
+                  d = get(f"{E}?{base}&models={m}&daily=sunshine_duration&hourly=cloud_cover")
+                  dd = d["daily"]; i = dd["time"].index(DAY)
+                  vals = sorted(round(dd[k][i]/3600,1) for k in dd if k.startswith("sunshine_duration") and dd[k][i] is not None)
+                  h = d["hourly"]; idx = [k for k,t in enumerate(h["time"]) if t.startswith(DAY) and 9 <= int(t[11:13]) <= 16]
+                  cc = sorted(round(st.mean([h[k][j] for j in idx if h[k][j] is not None])) for k in h if k.startswith("cloud_cover") and any(h[k][j] is not None for j in idx))
+                  dl = 10.6
+                  print(f"{m}: {len(vals)} members")
+                  print(f"  sunshine hours sorted: {vals}")
+                  print(f"  members >=65% of ~{dl}h daylight: {sum(v >= 0.65*dl for v in vals)}/{len(vals)}")
+                  print(f"  9-16h avg cloud cover sorted: {cc}")
+                  print(f"  members with avg cloud <=50%: {sum(c <= 50 for c in cc)}/{len(cc)}")
+              except Exception as e:
+                  print(f"{m}: ERROR {e}")
