@@ -17,7 +17,8 @@ const CACHE_TTL_MS = 60 * 60 * 1000;
 const ENS_DAYS = 10;
 const ENS_MAX_PLACES = 80;
 const ENS_BATCH = 20;
-const SURE = 50;             // % of scenarios that must agree for a "sunny" day
+const SURE = 75;             // % of scenarios that must agree for a "sunny" (yellow) day
+const VERY_SURE = 90;        // deep gold: almost certainly sunny
 const DEFAULTS = { radius: '700', minStreak: '2', window: '10', sort: 'nearest', strictness: '0.65' };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const SNOW_CODES = new Set([71, 73, 75, 77, 85, 86]);
@@ -315,10 +316,13 @@ function setStatus(html, kind = '') {
   el.innerHTML = html;
 }
 
+// Sunny days with a very high sun chance get a deeper gold.
+const dayClass = (r, i) => r.kinds[i] === 'sun' && r.chances[i] >= VERY_SURE ? 'sun sure' : r.kinds[i];
+
 function stripHtml(r) {
   const cells = r.days.map((d, i) => {
     const title = `${fmtDay(d.date)}: ${r.kinds[i]}${r.chances[i] != null ? ` (sun chance ${r.chances[i]}%)` : ''}`;
-    const cls = ['d', r.kinds[i], i >= r.windowDays ? 'out' : '', i === 0 ? 'today' : ''].join(' ');
+    const cls = ['d', dayClass(r, i), i >= r.windowDays ? 'out' : '', i === 0 ? 'today' : ''].join(' ');
     return `<div class="${cls}" title="${esc(title)}">${dateOf(d.date).getDate()}</div>`;
   }).join('');
   const labels = r.days.map(d => `<span>${esc(fmtWeekday(d.date).slice(0, 2))}</span>`).join('');
@@ -461,7 +465,7 @@ function openDetail(idx) {
       const sc = r.chances[i];
       return `<tr class="${r.kinds[i] === 'sun' ? 'sunny-row' : r.kinds[i] === 'maybe' ? 'maybe-row' : ''}">
         <td><span class="conf ${confidence(i)}">●</span> ${esc(fmtDay(d.date))}</td>
-        <td><span class="dot ${r.kinds[i]}" style="margin:0"></span></td>
+        <td><span class="dot ${dayClass(r, i)}" style="margin:0"></span></td>
         <td>${hours} h${share != null ? ` <span class="muted small">(${share}%)</span>` : ''}</td>
         <td>${sc != null ? `<span class="pill" style="${pillStyle(sc, 'sun')}">${sc}%</span>` : loading ? '…' : '–'}</td>
         <td>${d.rainProb != null ? `<span class="pill" style="${pillStyle(d.rainProb, 'rain')}">${d.rainProb}%</span>` : '–'}</td>

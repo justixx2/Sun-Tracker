@@ -6,8 +6,9 @@
   --border: #ece4d4;
   --accent: #f59e0b;
   --accent-text: #7a4b00;
-  --sun: #fbbf24;
-  --partly: #fde68a;
+  --sun: #fcd34d;
+  --sure: #f59e0b;
+  --partly: #e5e0c8;
   --cloud: #cbd5e1;
   --rain: #60a5fa;
   --snow: #c7d2fe;
@@ -29,8 +30,9 @@
     --border: #2e333b;
     --accent-text: #fcd34d;
     --cloud: #4b5563;
-    --partly: #a16207;
-    --sun: #f59e0b;
+    --partly: #5c5640;
+    --sun: #ca8a04;
+    --sure: #fbbf24;
     --rain: #2563eb;
     --snow: #6366f1;
     --na: #262a31;
@@ -123,6 +125,7 @@ main { padding: 12px 16px 24px; max-width: 760px; margin: 0 auto; }
 .strip .d.out { opacity: .3; }
 .strip .d.today { outline: 2px solid var(--text); outline-offset: -2px; }
 .sun { background: var(--sun) !important; }
+.sun.sure { background: var(--sure) !important; }
 .partly { background: var(--partly) !important; }
 .cloud { background: var(--cloud) !important; }
 .rain { background: var(--rain) !important; }

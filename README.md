@@ -32,7 +32,8 @@ Forecasts are cached for an hour.
 Two independent checks must agree before a day counts as **☀️ sunny**:
 
 1. **Main forecast:** sunshine ÷ daylight is at least your chosen level (default 65%) and the chance of rain is below 40%.
-2. **Sun chance:** at least 50% of the 51 ECMWF ensemble scenarios reach that same sunshine level.
+2. **Sun chance:** at least 75% of the 51 ECMWF ensemble scenarios reach that same sunshine level
+   (deep gold when 90%+).
 
 If only one of them says sunny, the day is **maybe sunny** (striped). Days with ≥1 mm of likely
 precipitation are rain or snow. Cards show how sure the sunny spell is (average sun chance), and
