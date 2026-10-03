@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Sun Tracker</title>
+  <meta name="description" content="Find the closest places with sunny weather in the coming days.">
+  <meta name="theme-color" content="#f59e0b">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Sun Tracker">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="top-row">
+      <h1>☀️ Sun Tracker</h1>
+      <button id="refreshBtn" class="icon-btn" aria-label="Refresh forecast" title="Refresh">⟳</button>
+    </div>
+    <button id="locationBtn" class="location-line">📍 <span id="locationText">Finding your location…</span></button>
+    <div class="controls">
+      <label>Distance
+        <select id="radius">
+          <option value="200">200 km</option>
+          <option value="400">400 km</option>
+          <option value="700">700 km</option>
+          <option value="1000">1000 km</option>
+          <option value="1500">1500 km</option>
+          <option value="2500">2500 km</option>
+        </select>
+      </label>
+      <label>Sun in a row
+        <select id="minStreak">
+          <option value="1">1+ day</option>
+          <option value="2">2+ days</option>
+          <option value="3">3+ days</option>
+          <option value="5">5+ days</option>
+          <option value="7">7+ days</option>
+        </select>
+      </label>
+      <label>Within
+        <select id="window">
+          <option value="3">3 days</option>
+          <option value="7">7 days</option>
+          <option value="10">10 days</option>
+          <option value="16">16 days</option>
+        </select>
+      </label>
+      <label>Sort
+        <select id="sort">
+          <option value="nearest">Closest</option>
+          <option value="longest">Longest sun</option>
+          <option value="most">Most sunny days</option>
+          <option value="soonest">Soonest</option>
+        </select>
+      </label>
+      <label>Sunny means
+        <select id="strictness">
+          <option value="0.5">50%+ sunshine</option>
+          <option value="0.65">65%+ sunshine</option>
+          <option value="0.8">80%+ sunshine</option>
+        </select>
+      </label>
+    </div>
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-tab="list" role="tab">List</button>
+      <button class="tab" data-tab="map" role="tab">Map</button>
+    </nav>
+  </header>
+
+  <main>
+    <div id="status" class="status" hidden></div>
+    <section id="listView">
+      <div id="homeCard"></div>
+      <div id="summary" class="summary"></div>
+      <div id="results"></div>
+    </section>
+    <section id="mapView" hidden>
+      <div id="map"></div>
+      <div class="map-legend">
+        <span><i style="background:var(--c0)"></i>0</span>
+        <span><i style="background:var(--c1)"></i>1</span>
+        <span><i style="background:var(--c2)"></i>2</span>
+        <span><i style="background:var(--c3)"></i>3–4</span>
+        <span><i style="background:var(--c5)"></i>5–6</span>
+        <span><i style="background:var(--c7)"></i>7+</span>
+        <em>sunny days in a row</em>
+      </div>
+    </section>
+    <p class="legend">
+      <span class="dot sun"></span>Sunny
+      <span class="dot partly"></span>Partly
+      <span class="dot cloud"></span>Cloudy
+      <span class="dot rain"></span>Rain
+      <span class="dot snow"></span>Snow
+      <br>Forecast reliability drops after ~5 days; faded days are outside your “Within” window.
+      Weather by <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>,
+      places by <a href="https://www.geonames.org/" target="_blank" rel="noopener">GeoNames</a>.
+    </p>
+  </main>
+
+  <dialog id="detail" class="sheet">
+    <div class="sheet-head">
+      <div>
+        <h2 id="detailTitle"></h2>
+        <p id="detailSub" class="muted"></p>
+      </div>
+      <button class="icon-btn close" data-close aria-label="Close">✕</button>
+    </div>
+    <div class="actions">
+      <a id="directionsLink" class="btn" target="_blank" rel="noopener">🚗 Directions</a>
+      <a id="mapsLink" class="btn ghost" target="_blank" rel="noopener">🗺️ Open map</a>
+    </div>
+    <p id="ensembleNote" class="muted small"></p>
+    <div class="table-wrap">
+      <table class="days">
+        <thead>
+          <tr><th>Day</th><th></th><th>Sun</th><th title="Chance of sun from 51 forecast scenarios">Sun chance</th><th>Rain</th><th>Temp</th></tr>
+        </thead>
+        <tbody id="detailRows"></tbody>
+      </table>
+    </div>
+    <p class="muted small">
+      <b>Sun</b> = expected hours of sunshine (and % of daylight).
+      <b>Sun chance</b> = share of 51 ECMWF ensemble scenarios with a mostly clear day (9:00–17:00).
+      <b>Rain</b> = chance of precipitation. Reliability: <span class="conf high">●</span> high (0–2 days),
+      <span class="conf med">●</span> medium (3–6), <span class="conf low">●</span> low (7+).
+    </p>
+  </dialog>
+
+  <dialog id="locationDialog" class="sheet">
+    <div class="sheet-head">
+      <h2>Your location</h2>
+      <button class="icon-btn close" data-close aria-label="Close">✕</button>
+    </div>
+    <button id="useGps" class="btn">📍 Use my current location</button>
+    <p class="muted small">Or search for a town to start from:</p>
+    <input id="placeSearch" type="search" placeholder="e.g. Kraków" autocomplete="off">
+    <ul id="placeResults" class="place-results"></ul>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
