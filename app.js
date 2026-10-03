@@ -184,13 +184,15 @@ function analyze(place, days, s) {
     } else closeRun();
   }
   closeRun();
-  // How long does the best run actually last, even past the window? ("a week of sun" may continue)
-  if (best) {
-    let j = best.end + 1;
+  // How long does a run actually last, even past the window? ("a week of sun" may continue)
+  for (const r of [best, first]) {
+    if (!r || r.totalLen) continue;
+    let j = r.end + 1;
     while (j < days.length && kinds[j] === 'sun') j++;
-    best.totalLen = j - best.start;
+    r.totalLen = j - r.start;
   }
-  const highlight = first || best;
+  // Closest/soonest: show the first spell long enough; longest/most: show the longest spell.
+  const highlight = s.sort === 'longest' || s.sort === 'most' ? best : (first || best);
   let avgMax = null;
   if (highlight) {
     const temps = days.slice(highlight.start, highlight.end + 1).map(d => d.tmax).filter(t => t != null);
@@ -206,7 +208,7 @@ function analyze(place, days, s) {
 function sortResults(list, sort) {
   const by = {
     nearest: (a, b) => a.place.dist - b.place.dist,
-    longest: (a, b) => (b.best?.len || 0) - (a.best?.len || 0) || b.sunnyCount - a.sunnyCount || a.place.dist - b.place.dist,
+    longest: (a, b) => (b.best?.totalLen || 0) - (a.best?.totalLen || 0) || b.sunnyCount - a.sunnyCount || a.place.dist - b.place.dist,
     most: (a, b) => b.sunnyCount - a.sunnyCount || (b.best?.len || 0) - (a.best?.len || 0) || a.place.dist - b.place.dist,
     soonest: (a, b) => (a.first?.start ?? 99) - (b.first?.start ?? 99) || a.place.dist - b.place.dist,
   }[sort] || ((a, b) => a.place.dist - b.place.dist);
