@@ -19,6 +19,7 @@ const ENS_MAX_PLACES = 80;
 const ENS_BATCH = 20;
 const SURE = 75;             // % of scenarios that must agree for a "sunny" (yellow) day
 const VERY_SURE = 90;        // deep gold: almost certainly sunny
+const MAYBE = 50;            // most scenarios sunny, but not enough (or main forecast disagrees): striped
 const DEFAULTS = { radius: '700', minStreak: '2', window: '10', sort: 'nearest', strictness: '0.65' };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const SNOW_CODES = new Set([71, 73, 75, 77, 85, 86]);
@@ -240,9 +241,8 @@ function classify(day, threshold, chance, ensMode) {
   if (wet && prob >= 50) return 'rain';
   const main = mainSaysSunny(day, threshold);
   if (chance != null) {
-    const likely = chance >= SURE;
-    if (main && likely) return 'sun';
-    if (main || likely) return 'maybe';
+    if (main && chance >= SURE) return 'sun';
+    if (main || chance >= MAYBE) return 'maybe';
   } else if (main) {
     return ensMode === 'done' ? 'maybe' : 'sun';
   }
