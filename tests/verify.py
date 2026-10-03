@@ -14,15 +14,21 @@ UA = {"User-Agent": "SunTracker-verify/1.0 github.com/justixx2/Sun-Tracker"}
 MAX_CLOUD = 60          # daytime cloud % that still counts as sunny (app default)
 SURE, MAYBE = 75, 50
 
-def get(url):
+def get(url, tries=3):
+    import time
     req = urllib.request.Request(url, headers=UA)
-    try:
-        with urllib.request.urlopen(req, timeout=90) as r:
-            return json.load(r)
-    except urllib.error.HTTPError as e:
-        return {"error": f"{e.code} {e.read().decode()[:150]}"}
-    except Exception as e:
-        return {"error": str(e)}
+    for attempt in range(tries):
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode()[:150]
+            if e.code == 429 and attempt < tries - 1:
+                time.sleep(65); continue
+            return {"error": f"{e.code} {body}"}
+        except Exception as e:
+            if attempt < tries - 1: time.sleep(5); continue
+            return {"error": str(e)}
 
 def day_mean(times, vals, day, h0=9, h1=16):
     v = [vals[i] for i, t in enumerate(times) if t.startswith(day) and h0 <= int(t[11:13]) <= h1 and vals[i] is not None]
@@ -49,6 +55,7 @@ def ours(lat, lon):
     e = get(f"https://ensemble-api.open-meteo.com/v1/ensemble?latitude={lat}&longitude={lon}&timezone=auto"
             "&forecast_days=8&models=ecmwf_ifs025&hourly=cloud_cover")
     out = {}
+    if "error" in f: return {}, 0
     d, h = f["daily"], f["hourly"]
     eh = e.get("hourly", {})
     keys = [k for k in eh if k.startswith("cloud_cover")]
@@ -197,5 +204,6 @@ def part2():
               f" caught {pct(s['rain_found'], s['rain_actual'])} of rainy days  (n={s['n']})")
 
 if __name__ == "__main__":
-    part1()
-    part2()
+    which = sys.argv[1:] or ["2", "1"]
+    if "2" in which: part2()
+    if "1" in which: part1()
