@@ -8,7 +8,7 @@ for the next days, so you can see where to travel for sun.
   up to 2,500 km away.
 - 16-day daily forecast per town: sunshine hours, chance of rain, temperatures.
 - Shows how long the sun lasts: "☀️ 6 sunny days in a row · Sat 4 → Thu 9", plus a 16-day colour strip.
-- Tap a town for day-by-day details, including a **sun chance %** from 51 ECMWF ensemble scenarios,
+- Each sunny day is confirmed against 51 ECMWF ensemble scenarios (**sun chance %**); tap a town for day-by-day details,
   a forecast-reliability marker, and a Directions button (Google Maps).
 - Filters: distance, minimum sunny days in a row, how many days ahead, how strict "sunny" is,
   and sort by closest / longest sun / most sunny days / soonest.
@@ -29,10 +29,19 @@ Forecasts are cached for an hour.
 
 ## How "sunny" is decided
 
-For each day: sunshine duration ÷ daylight duration. A day is **sunny** when that is at least the
-chosen threshold (default 65%) and the chance of rain is below 40%. Lower values count as partly
-cloudy / cloudy, and days with ≥1 mm of likely precipitation as rain or snow. Forecasts are most
-reliable for the first 2–3 days and get rough after ~7.
+Two independent checks must agree before a day counts as **☀️ sunny**:
+
+1. **Main forecast:** sunshine ÷ daylight is at least your chosen level (default 65%) and the chance of rain is below 40%.
+2. **Sun chance:** at least 50% of the 51 ECMWF ensemble scenarios reach that same sunshine level.
+
+If only one of them says sunny, the day is **maybe sunny** (striped). Days with ≥1 mm of likely
+precipitation are rain or snow. Cards show how sure the sunny spell is (average sun chance), and
+"Most reliable sun" sorts by expected sunny days.
+
+Each ensemble scenario counts against Open-Meteo's free limit (600 calls/minute, 10,000/day), so the
+sun chance is checked for your location plus the ~80 most promising towns, for the first 10 days.
+Days beyond that, and towns that weren't checked, can only be "maybe". Tapping any town checks it
+on demand. If the per-minute limit is hit, the app waits a minute and continues.
 
 ## Run locally
 

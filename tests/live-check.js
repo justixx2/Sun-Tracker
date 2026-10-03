@@ -22,6 +22,9 @@ const LAT = +(process.env.LAT || 50.06), LON = +(process.env.LON || 19.94);
   await page.goto('http://localhost:8765/');
   await page.waitForFunction(() => document.querySelector('#homeCard .card') || document.querySelector('.status.error'),
     null, { timeout: 90000 });
+  // Wait for the sun-chance (ensemble) step to finish too.
+  await page.waitForFunction(() => /Sun chance/.test(document.querySelector('#summary').textContent) ||
+    document.querySelector('.status.error'), null, { timeout: 180000 });
   const err = await page.$('.status.error');
   if (err) throw new Error('App showed error: ' + await err.innerText());
 
@@ -36,10 +39,10 @@ const LAT = +(process.env.LAT || 50.06), LON = +(process.env.LON || 19.94);
   }));
   console.log('\nTop results (sorted by closest):\n' + cards.join('\n'));
 
-  await page.selectOption('#sort', 'longest');
+  await page.selectOption('#sort', 'reliable');
   const longest = await page.$$eval('#results .card', els => els.slice(0, 5).map(e =>
     `${e.querySelector('.card-name').innerText} (${e.querySelector('.card-dist').innerText}): ${e.querySelector('.card-line').innerText}`));
-  console.log('\nLongest sunny spells:\n' + longest.join('\n'));
+  console.log('\nMost reliable sun:\n' + longest.join('\n'));
 
   const first = await page.$('#results .card');
   if (first) {

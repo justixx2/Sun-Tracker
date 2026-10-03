@@ -57,6 +57,7 @@
           <option value="longest">Longest sun</option>
           <option value="most">Most sunny days</option>
           <option value="soonest">Soonest</option>
+          <option value="reliable">Most reliable sun</option>
         </select>
       </label>
       <label>Sunny means
@@ -94,11 +95,13 @@
     </section>
     <p class="legend">
       <span class="dot sun"></span>Sunny
+      <span class="dot maybe"></span>Maybe sunny
       <span class="dot partly"></span>Partly
       <span class="dot cloud"></span>Cloudy
       <span class="dot rain"></span>Rain
       <span class="dot snow"></span>Snow
-      <br>Forecast reliability drops after ~5 days; faded days are outside your “Within” window.
+      <br><b>Sunny</b> = the main forecast and most of 51 ECMWF scenarios agree. <b>Maybe</b> = they disagree,
+      or it's beyond the 10 days we can check. Faded days are outside your “Within” window.
       Weather by <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>,
       places by <a href="https://www.geonames.org/" target="_blank" rel="noopener">GeoNames</a>.
     </p>
@@ -127,7 +130,9 @@
     </div>
     <p class="muted small">
       <b>Sun</b> = expected hours of sunshine (and % of daylight).
-      <b>Sun chance</b> = share of 51 ECMWF ensemble scenarios with a mostly clear day (9:00–17:00).
+      <b>Sun chance</b> = share of 51 ECMWF ensemble scenarios where the day reaches your sunshine level
+      (e.g. 65% of daylight). A day is <b>sunny</b> only when the main forecast says sunny <i>and</i> the sun chance
+      is 50%+; if only one says so it's <b>maybe</b> (striped).
       <b>Rain</b> = chance of precipitation. Reliability: <span class="conf high">●</span> high (0–2 days),
       <span class="conf med">●</span> medium (3–6), <span class="conf low">●</span> low (7+).
     </p>
