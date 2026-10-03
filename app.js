@@ -7,22 +7,24 @@ const DAILY_VARS = [
   'weather_code', 'temperature_2m_max', 'temperature_2m_min', 'sunshine_duration',
   'daylight_duration', 'precipitation_sum', 'precipitation_probability_max',
 ];
-const FORECAST_DAYS = 16;
+const FORECAST_DAYS = 10;
 const TARGET_PLACES = 250;   // how many towns to check per search
 const BATCH_SIZE = 50;       // locations per API request
 const CONCURRENCY = 3;
 const CACHE_TTL_MS = 60 * 60 * 1000;
-// Sun chance comes from the 51-member ECMWF ensemble. Every member counts against Open-Meteo's
-// free limit (600 calls/minute), so we only check the best candidates and the first 10 days.
+// Sunny days are double-checked against the 51 ECMWF ensemble scenarios. Every scenario counts
+// against Open-Meteo's free limit (600 calls/minute), so only the best candidates are checked.
 const ENS_DAYS = 10;
 const ENS_MAX_PLACES = 80;
 const ENS_BATCH = 20;
-const SURE = 75;             // % of scenarios that must agree for a "sunny" (yellow) day
-const VERY_SURE = 90;        // deep gold: almost certainly sunny
-const MAYBE = 50;            // most scenarios sunny, but not enough (or main forecast disagrees): striped
-const DEFAULTS = { radius: '700', minStreak: '2', window: '10', sort: 'nearest', strictness: '0.65' };
+const MAX_CLOUD = 60;        // daytime (9-17) cloud cover % that still counts as sunny
+const SURE = 75;             // % of scenarios that must be sunny for a "Sunny" day
+const MAYBE = 50;            // below SURE but at least this (or main forecast alone): "Maybe sunny"
+const DEFAULTS = { radius: '700', minStreak: '2', window: '7', sort: 'nearest' };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const SNOW_CODES = new Set([71, 73, 75, 77, 85, 86]);
+const ICON = { sun: '☀️', maybe: '🌤️', cloud: '☁️', rain: '🌧️', snow: '❄️', na: '·' };
+const LABEL = { sun: 'Sunny', maybe: 'Maybe sunny', cloud: 'Cloudy', rain: 'Rain', snow: 'Snow', na: 'No data' };
 
 // ---------- Small helpers ----------
 const $ = sel => document.querySelector(sel);
@@ -54,8 +56,7 @@ function compass(a, b) {
 const dateOf = iso => new Date(iso + 'T12:00:00');
 const fmtDay = iso => dateOf(iso).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' });
 const fmtWeekday = iso => dateOf(iso).toLocaleDateString(undefined, { weekday: 'short' });
-const fmtRange = (a, b) => a === b ? fmtDay(a) : `${fmtDay(a)} → ${fmtDay(b)}`;
-const confidence = i => i <= 2 ? 'high' : i <= 6 ? 'med' : 'low';
+const fmtRange = (a, b) => a === b ? fmtDay(a) : `${fmtDay(a)} – ${fmtDay(b)}`;
 
 // ---------- State ----------
 const state = {
@@ -63,7 +64,7 @@ const state = {
   origin: null,        // {lat, lon, label}
   places: [],          // places checked: {name, cc, lat, lon, pop, dist, dir, isHome}
   forecasts: [],       // daily forecast per place (same order)
-  ens: [],             // ensemble sunshine per place: {dates, members: [[seconds per member] per day]} or null
+  ens: [],             // ensemble per place: {dates, members: [[daytime cloud % per member] per day]} or null
   ensMode: 'pending',  // pending | done | failed
   fetchedAt: 0,
   results: [],
@@ -199,7 +200,7 @@ async function fetchEnsembleBatch(batch, onWait) {
 function pickForEnsemble(places, forecasts) {
   const cand = places.map((p, i) => ({
     p, i,
-    n: (forecasts[i] || []).slice(0, ENS_DAYS).filter(d => mainSaysSunny(d, 0.5)).length,
+    n: (forecasts[i] || []).slice(0, ENS_DAYS).filter(d => mainSaysSunny(d, MAX_CLOUD + 15)).length,
   })).filter(c => !c.p.isHome && c.n > 0);
   const picked = new Set(places[0]?.isHome ? [0] : []);
   [...cand].sort((a, b) => a.p.dist - b.p.dist).slice(0, ENS_MAX_PLACES / 2).forEach(c => picked.add(c.i));
@@ -239,53 +240,41 @@ async function fetchForecasts(places, onProgress, onWait) {
 
 // ---------- Analysis ----------
 const sunRatio = day => day.daylight > 0 ? day.sun / day.daylight : 0;
-// Highest daytime cloud cover that still counts as sunny, per "Sunny means" level:
-// 0.5 -> 75%, 0.65 -> 60%, 0.8 -> 45%
-const maxCloud = threshold => Math.round(125 - 100 * threshold);
-const mainSaysSunny = (day, threshold) =>
-  day.sun != null && day.daylight != null && sunRatio(day) >= threshold && (day.rainProb ?? 0) < 40 &&
-  (day.cloud == null || day.cloud <= maxCloud(threshold));
+const mainSaysSunny = (day, maxCloud = MAX_CLOUD) =>
+  day.cloud != null && day.cloud <= maxCloud && sunRatio(day) >= 0.5 && (day.rainProb ?? 0) < 40;
+const isRainy = day => (day.rainSum ?? 0) >= 5 || ((day.rainSum ?? 0) >= 1 && (day.rainProb ?? 0) >= 50);
 
 // % of ensemble scenarios whose daytime cloud cover is low enough to count as sunny (null = unknown).
-function sunChance(ens, day, threshold) {
+function sunChance(ens, day) {
   if (!ens) return null;
   const i = ens.dates.indexOf(day.date);
   const members = i >= 0 ? ens.members[i] : null;
   if (!members || !members.length) return null;
-  const limit = maxCloud(threshold);
-  return Math.round(100 * members.filter(c => c <= limit).length / members.length);
+  return Math.round(100 * members.filter(c => c <= MAX_CLOUD).length / members.length);
 }
 
-// sun   = main forecast sunny AND most scenarios agree
-// maybe = only one of them says sunny, or the sun chance could not be checked
-function classify(day, threshold, chance, ensMode) {
-  if (day.sun == null || day.daylight == null) return 'na';
-  const prob = day.rainProb ?? 0;
-  const wet = (day.rainSum ?? 0) >= 1;
-  if (wet && SNOW_CODES.has(day.code)) return 'snow';
-  if (wet && prob >= 50) return 'rain';
-  const main = mainSaysSunny(day, threshold);
+// sun   = main forecast sunny AND 75%+ of scenarios agree
+// maybe = only one of them says sunny (or 50-75% of scenarios), or it couldn't be double-checked
+// rain  = 1 mm+ with 50%+ chance, or 5 mm+
+function classify(day, chance, ensMode) {
+  if (day.cloud == null && day.sun == null) return 'na';
+  if (isRainy(day)) return SNOW_CODES.has(day.code) ? 'snow' : 'rain';
+  const main = mainSaysSunny(day);
   if (chance != null) {
     if (main && chance >= SURE) return 'sun';
     if (main || chance >= MAYBE) return 'maybe';
   } else if (main) {
     return ensMode === 'done' ? 'maybe' : 'sun';
   }
-  const partly = day.cloud != null ? day.cloud <= 80 : sunRatio(day) >= threshold * 0.55;
-  if (partly) return 'partly';
-  return wet ? 'rain' : 'cloud';
+  return 'cloud';
 }
 
 function analyze(place, days, ens, s, pi) {
-  const threshold = +s.strictness, windowDays = +s.window, minStreak = +s.minStreak;
-  const chances = days.map(d => sunChance(ens, d, threshold));
-  const kinds = days.map((d, i) => classify(d, threshold, chances[i], state.ensMode));
+  const windowDays = +s.window, minStreak = +s.minStreak;
+  const chances = days.map(d => sunChance(ens, d));
+  const kinds = days.map((d, i) => classify(d, chances[i], state.ensMode));
   const win = Math.min(windowDays, days.length);
-  let sunnyCount = 0, maybeCount = 0, expected = 0, best = null, first = null, run = null;
-  for (let i = 0; i < win; i++) {
-    if (kinds[i] === 'maybe') maybeCount++;
-    if (chances[i] != null) expected += chances[i] / 100;
-  }
+  let sunnyCount = 0, rainCount = 0, expected = 0, best = null, first = null, run = null;
   const closeRun = () => {
     if (!run) return;
     if (!best || run.len > best.len) best = run;
@@ -293,31 +282,23 @@ function analyze(place, days, ens, s, pi) {
     run = null;
   };
   for (let i = 0; i < win; i++) {
+    if (chances[i] != null) expected += chances[i] / 100;
+    if (kinds[i] === 'rain' || kinds[i] === 'snow') rainCount++;
     if (kinds[i] === 'sun') {
       sunnyCount++;
       run = run ? { ...run, len: run.len + 1, end: i } : { start: i, end: i, len: 1 };
     } else closeRun();
   }
   closeRun();
-  // How long does a run actually last, even past the window? ("a week of sun" may continue)
-  for (const r of [best, first]) {
-    if (!r || r.totalLen) continue;
-    let j = r.end + 1;
-    while (j < days.length && kinds[j] === 'sun') j++;
-    r.totalLen = j - r.start;
-  }
-  // Closest/soonest: show the first spell long enough; longest/most/reliable: show the longest spell.
-  const highlight = ['longest', 'most', 'reliable'].includes(s.sort) ? best : (first || best);
-  let avgMax = null, sure = null;
+  const highlight = s.sort === 'most' ? best : (first || best);
+  let avgMax = null;
   if (highlight) {
-    const span = i => i >= highlight.start && i < highlight.start + (highlight.totalLen || highlight.len);
-    const avg = arr => arr.length ? Math.round(arr.reduce((a, b) => a + b, 0) / arr.length) : null;
-    avgMax = avg(days.filter((d, i) => span(i) && d.tmax != null).map(d => d.tmax));
-    sure = avg(chances.filter((c, i) => span(i) && c != null));
+    const temps = days.slice(highlight.start, highlight.end + 1).map(d => d.tmax).filter(t => t != null);
+    if (temps.length) avgMax = Math.round(temps.reduce((a, b) => a + b, 0) / temps.length);
   }
   return {
-    place, pi, days, kinds, chances, sunnyCount, maybeCount, expected, windowDays: win,
-    best, first, highlight, avgMax, sure,
+    place, pi, days, kinds, chances, sunnyCount, rainCount, expected, windowDays: win,
+    best, first, highlight, avgMax,
     qualifies: !!first,
   };
 }
@@ -325,10 +306,7 @@ function analyze(place, days, ens, s, pi) {
 function sortResults(list, sort) {
   const by = {
     nearest: (a, b) => a.place.dist - b.place.dist,
-    longest: (a, b) => (b.best?.totalLen || 0) - (a.best?.totalLen || 0) || b.sunnyCount - a.sunnyCount || a.place.dist - b.place.dist,
-    most: (a, b) => b.sunnyCount - a.sunnyCount || (b.best?.len || 0) - (a.best?.len || 0) || a.place.dist - b.place.dist,
-    soonest: (a, b) => (a.first?.start ?? 99) - (b.first?.start ?? 99) || a.place.dist - b.place.dist,
-    reliable: (a, b) => b.expected - a.expected || b.sunnyCount - a.sunnyCount || a.place.dist - b.place.dist,
+    most: (a, b) => b.sunnyCount - a.sunnyCount || b.expected - a.expected || a.place.dist - b.place.dist,
   }[sort] || ((a, b) => a.place.dist - b.place.dist);
   return list.slice().sort(by);
 }
@@ -342,37 +320,25 @@ function setStatus(html, kind = '') {
   el.innerHTML = html;
 }
 
-// Sunny days with a very high sun chance get a deeper gold.
-const dayClass = (r, i) => r.kinds[i] === 'sun' && r.chances[i] >= VERY_SURE ? 'sun sure' : r.kinds[i];
-
 function stripHtml(r) {
-  const cells = r.days.map((d, i) => {
-    const title = `${fmtDay(d.date)}: ${r.kinds[i]}${r.chances[i] != null ? ` (sun chance ${r.chances[i]}%)` : ''}`;
-    const cls = ['d', dayClass(r, i), i >= r.windowDays ? 'out' : '', i === 0 ? 'today' : ''].join(' ');
-    return `<div class="${cls}" title="${esc(title)}">${dateOf(d.date).getDate()}</div>`;
-  }).join('');
-  const labels = r.days.map(d => `<span>${esc(fmtWeekday(d.date).slice(0, 2))}</span>`).join('');
-  return `<div class="strip">${cells}</div><div class="strip-labels">${labels}</div>`;
+  return '<div class="strip">' + r.days.slice(0, r.windowDays).map((d, i) =>
+    `<div class="d ${r.kinds[i]}${i === 0 ? ' today' : ''}" title="${esc(fmtDay(d.date) + ': ' + LABEL[r.kinds[i]])}">` +
+    `<span>${ICON[r.kinds[i]]}</span><small>${i === 0 ? 'Today' : esc(fmtWeekday(d.date))}</small></div>`).join('') + '</div>';
 }
 
 function headline(r) {
   const h = r.highlight;
-  if (!h) return `<span class="badge none">No sure sunny days</span> in the next ${r.windowDays} days` +
-    (r.maybeCount ? ` · ${r.maybeCount} maybe` : '');
-  const days = r.days;
-  const len = h.totalLen || h.len;
-  const label = len >= 7 ? `${len} days of sun` : len === 1 ? '1 sunny day' : `${len} sunny days in a row`;
-  const cls = len >= 7 ? 'badge week' : 'badge';
-  const temp = r.avgMax != null ? ` · ~${r.avgMax}°C` : '';
-  const sure = r.sure != null ? ` · <b>${r.sure}% sure</b>` : '';
-  const maybe = r.maybeCount ? ` (+${r.maybeCount} maybe)` : '';
-  return `<span class="${cls}">☀️ ${label}</span> ${esc(fmtRange(days[h.start].date, days[h.start + len - 1].date))}${temp}${sure}` +
-    ` · ${r.sunnyCount}/${r.windowDays} days sunny${maybe}`;
+  if (!h) {
+    return `No sunny days in the next ${r.windowDays} days` + (r.rainCount ? ` · 🌧️ rain on ${r.rainCount}` : '');
+  }
+  const label = h.len === 1 ? '1 sunny day' : `${h.len} sunny days`;
+  const temp = r.avgMax != null ? ` · ${r.avgMax}°` : '';
+  return `<b>☀️ ${label}</b> · ${esc(fmtRange(r.days[h.start].date, r.days[h.end].date))}${temp}`;
 }
 
 function cardHtml(r, idx) {
   const p = r.place;
-  const name = p.isHome ? `🏠 ${esc(p.name)}` : `${flag(p.cc)} ${esc(p.name)}`;
+  const name = p.isHome ? `📍 ${esc(p.name)}` : `${flag(p.cc)} ${esc(p.name)}`;
   const dist = p.isHome ? 'You are here' : `${Math.round(p.dist)} km ${p.dir}`;
   return `<article class="card${p.isHome ? ' home' : ''}" data-idx="${idx}">
     <div class="card-head"><span class="card-name">${name}</span><span class="card-dist">${dist}</span></div>
@@ -391,15 +357,13 @@ function render() {
   state.results = [home, ...matches].filter(Boolean);
 
   $('#homeCard').innerHTML = home ? cardHtml(home, 0) : '';
-  const minLabel = s.minStreak === '1' ? 'at least 1 sunny day' : `${s.minStreak}+ sunny days in a row`;
-  const checked = state.ens.filter(Boolean).length;
-  const ensNote = state.ensMode === 'done' ? ` Sun chance checked for the ${checked} most promising places.`
-    : state.ensMode === 'failed' ? ' Sun chance unavailable – using the main forecast only.' : '';
-  $('#summary').textContent =
-    `${matches.length} of ${others.length} towns within ${s.radius} km have ${minLabel} in the next ${s.window} days.${ensNote}`;
+  const what = s.minStreak === '1' ? 'a sunny day' : `${s.minStreak}+ sunny days in a row`;
+  $('#summary').textContent = matches.length
+    ? `${matches.length} places within ${s.radius} km with ${what} in the next ${s.window} days:`
+    : '';
   $('#results').innerHTML = matches.length
     ? matches.map((r, i) => cardHtml(r, i + (home ? 1 : 0))).join('')
-    : `<div class="empty">No sunny spells found with these settings.<br>Try a bigger distance, fewer days in a row, or a longer “Within” window.</div>`;
+    : `<div class="empty">No places within ${s.radius} km with ${what} in the next ${s.window} days.<br>Try a bigger distance or fewer days in a row.</div>`;
   updateLocationText();
   if (!$('#mapView').hidden) renderMap();
 }
@@ -415,8 +379,7 @@ function updateLocationText() {
 function streakColor(len) {
   const v = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   if (!len) return v('--c0');
-  if (len === 1) return v('--c1');
-  if (len === 2) return v('--c2');
+  if (len <= 2) return v('--c2');
   if (len <= 4) return v('--c3');
   if (len <= 6) return v('--c5');
   return v('--c7');
@@ -446,11 +409,11 @@ async function renderMap() {
   const bounds = [[state.origin.lat, state.origin.lon]];
   state.results.forEach((r, idx) => {
     const p = r.place;
-    const len = r.highlight ? (r.highlight.totalLen || r.highlight.len) : 0;
+    const len = r.highlight ? r.highlight.len : 0;
     const m = p.isHome
       ? L.circleMarker([p.lat, p.lon], { radius: 9, color: '#111', weight: 3, fillColor: streakColor(len), fillOpacity: 1 })
       : L.circleMarker([p.lat, p.lon], { radius: 7, color: '#00000055', weight: 1, fillColor: streakColor(len), fillOpacity: .95 });
-    m.bindPopup(`<b>${p.isHome ? '🏠 ' : flag(p.cc) + ' '}${esc(p.name)}</b><br>${p.isHome ? 'You are here' : Math.round(p.dist) + ' km ' + p.dir}<br>` +
+    m.bindPopup(`<b>${p.isHome ? '📍 ' : flag(p.cc) + ' '}${esc(p.name)}</b><br>${p.isHome ? 'You are here' : Math.round(p.dist) + ' km ' + p.dir}<br>` +
       `${headline(r)}<br><button class="btn" data-open="${idx}">Details</button>`);
     m.addTo(state.mapLayer);
     bounds.push([p.lat, p.lon]);
@@ -460,15 +423,9 @@ async function renderMap() {
 }
 
 // ---------- Detail sheet ----------
-function pillStyle(pct, kind) {
-  if (pct == null) return '';
-  const a = Math.min(1, pct / 100) * 0.85 + 0.1;
-  return kind === 'sun' ? `background: rgba(251,191,36,${a})` : `background: rgba(96,165,250,${a})`;
-}
-
 function saveCache() {
   if (!state.cacheKey) return;
-  store.set('forecastCache2', {
+  store.set('forecastCache3', {
     key: state.cacheKey, ts: state.fetchedAt, places: state.places,
     forecasts: state.forecasts, ens: state.ens, ensMode: state.ensMode,
   });
@@ -478,47 +435,31 @@ function openDetail(idx) {
   let r = state.results[idx];
   if (!r) return;
   const p = r.place, pi = r.pi;
-  $('#detailTitle').textContent = `${p.isHome ? '🏠' : flag(p.cc)} ${p.name}`;
-  $('#detailSub').textContent = (p.isHome ? 'Your location' : `${Math.round(p.dist)} km ${p.dir} of you`) +
-    (p.pop ? ` · pop. ${p.pop.toLocaleString()}` : '');
+  $('#detailTitle').textContent = `${p.isHome ? '📍' : flag(p.cc)} ${p.name}`;
+  $('#detailSub').textContent = p.isHome ? 'Your location' : `${Math.round(p.dist)} km ${p.dir} of you`;
   $('#directionsLink').href = `https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lon}`;
-  $('#mapsLink').href = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(p.name + (p.cc ? ', ' + p.cc : ''))}`;
-  const limit = maxCloud(+state.settings.strictness);
-  const renderRows = loading => {
-    $('#detailRows').innerHTML = r.days.map((d, i) => {
-      const hours = d.sun != null ? (d.sun / 3600).toFixed(1) : '–';
-      const cloud = d.cloud;
-      const sc = r.chances[i];
-      return `<tr class="${r.kinds[i] === 'sun' ? 'sunny-row' : r.kinds[i] === 'maybe' ? 'maybe-row' : ''}">
-        <td><span class="conf ${confidence(i)}">●</span> ${esc(fmtDay(d.date))}</td>
-        <td><span class="dot ${dayClass(r, i)}" style="margin:0"></span></td>
-        <td>${hours} h${cloud != null ? ` <span class="muted small">☁${cloud}%</span>` : ''}</td>
-        <td>${sc != null ? `<span class="pill" style="${pillStyle(sc, 'sun')}">${sc}%</span>` : loading ? '…' : '–'}</td>
-        <td>${d.rainProb != null ? `<span class="pill" style="${pillStyle(d.rainProb, 'rain')}">${d.rainProb}%</span>` : '–'}</td>
-        <td>${d.tmax != null ? Math.round(d.tmax) : '–'}° / ${d.tmin != null ? Math.round(d.tmin) : '–'}°</td>
-      </tr>`;
-    }).join('');
+  const renderRows = () => {
+    $('#detailRows').innerHTML = r.days.map((d, i) => `
+      <li class="row ${r.kinds[i]}${i >= 5 ? ' far' : ''}">
+        <span class="row-day">${i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : esc(fmtDay(d.date))}</span>
+        <span class="row-icon">${ICON[r.kinds[i]]}</span>
+        <span class="row-label">${LABEL[r.kinds[i]]}</span>
+        <span class="row-temp">${d.tmax != null ? Math.round(d.tmax) + '°' : ''}<small>${d.tmin != null ? ' ' + Math.round(d.tmin) + '°' : ''}</small></span>
+      </li>`).join('');
   };
-  const note = () => {
-    const ens = state.ens[pi];
-    $('#ensembleNote').textContent = ens
-      ? `Sun chance = share of ${ens.members[0]?.length || 51} forecast scenarios with ${limit}% or less cloud between 9:00 and 17:00 (first ${ENS_DAYS} days).`
-      : 'Sun probabilities are unavailable right now – striped days are unconfirmed.';
-  };
+  renderRows();
   $('#detail').showModal();
-  if (state.ens[pi]) { renderRows(false); note(); return; }
-  renderRows(true);
-  $('#ensembleNote').textContent = 'Loading sun probabilities…';
+  if (state.ens[pi] || state.ensMode !== 'done') return;
+  // This town wasn't double-checked yet: do it now.
   fetchEnsembleBatch([p])
     .then(([ens]) => {
       state.ens[pi] = ens;
       saveCache();
       r = analyze(p, r.days, ens, state.settings, pi);
-      if (!$('#detail').open) return render();
-      renderRows(false); note();
+      renderRows();
       render();
     })
-    .catch(() => { renderRows(false); note(); });
+    .catch(() => {});
 }
 
 // ---------- Location ----------
@@ -560,7 +501,7 @@ async function refresh({ force = false } = {}) {
   try {
     await loadCities();
     const key = cacheKey();
-    const cached = store.get('forecastCache2');
+    const cached = store.get('forecastCache3');
     if (!force && cached && cached.key === key && Date.now() - cached.ts < CACHE_TTL_MS) {
       state.places = cached.places; state.forecasts = cached.forecasts; state.fetchedAt = cached.ts;
       state.ens = cached.ens || []; state.ensMode = cached.ensMode || 'failed'; state.cacheKey = key;
@@ -571,7 +512,7 @@ async function refresh({ force = false } = {}) {
     const places = selectPlaces(state.origin, +state.settings.radius);
     const progress = (label, done, total) => setStatus(
       `${label}<div class="progress"><div style="width:${Math.round(100 * done / total)}%"></div></div>`);
-    const onWait = () => setStatus('⏳ Weather service is busy (free limit per minute) – continuing in 1 minute…');
+    const onWait = () => setStatus('⏳ Weather service is busy – continuing in 1 minute…');
     progress(`Checking the weather in ${places.length} towns…`, 0, 1);
     const forecasts = await fetchForecasts(places,
       (done, total) => progress(`Checking the weather in ${places.length} towns…`, done, total), onWait);
@@ -580,7 +521,7 @@ async function refresh({ force = false } = {}) {
     render();
 
     const picks = pickForEnsemble(places, forecasts);
-    const ensLabel = `Checking sun chance (51 scenarios) for ${picks.length} best places…`;
+    const ensLabel = `Double-checking sunny days for the ${picks.length} best places…`;
     progress(ensLabel, 0, 1);
     try {
       state.ens = await fetchEnsembles(places, picks, (done, total) => progress(ensLabel, done, total), onWait);
@@ -589,7 +530,7 @@ async function refresh({ force = false } = {}) {
     } catch (e) {
       console.error(e);
       state.ensMode = 'failed';
-      setStatus(`⚠️ Couldn't load sun chance (${esc(e.message)}). Showing the main forecast only.`, 'error');
+      setStatus(`⚠️ Couldn't double-check sunny days (${esc(e.message)}). Results may be less reliable.`, 'error');
     }
     saveCache();
     render();

@@ -34,37 +34,27 @@
           <option value="2500">2500 km</option>
         </select>
       </label>
-      <label>Sun in a row
+      <label>Sunny days in a row
         <select id="minStreak">
-          <option value="1">1+ day</option>
-          <option value="2">2+ days</option>
-          <option value="3">3+ days</option>
-          <option value="5">5+ days</option>
-          <option value="7">7+ days</option>
+          <option value="1">1+</option>
+          <option value="2">2+</option>
+          <option value="3">3+</option>
+          <option value="5">5+</option>
+          <option value="7">7+</option>
         </select>
       </label>
       <label>Within
         <select id="window">
           <option value="3">3 days</option>
+          <option value="5">5 days</option>
           <option value="7">7 days</option>
           <option value="10">10 days</option>
-          <option value="16">16 days</option>
         </select>
       </label>
-      <label>Sort
+      <label>Show first
         <select id="sort">
           <option value="nearest">Closest</option>
-          <option value="longest">Longest sun</option>
-          <option value="most">Most sunny days</option>
-          <option value="soonest">Soonest</option>
-          <option value="reliable">Most reliable sun</option>
-        </select>
-      </label>
-      <label>Sunny means
-        <select id="strictness">
-          <option value="0.5">Some sun (≤75% cloud)</option>
-          <option value="0.65">Mostly sunny (≤60% cloud)</option>
-          <option value="0.8">Clear skies (≤45% cloud)</option>
+          <option value="most">Most sun</option>
         </select>
       </label>
     </div>
@@ -78,15 +68,14 @@
     <div id="status" class="status" hidden></div>
     <section id="listView">
       <div id="homeCard"></div>
-      <div id="summary" class="summary"></div>
+      <p id="summary" class="summary"></p>
       <div id="results"></div>
     </section>
     <section id="mapView" hidden>
       <div id="map"></div>
       <div class="map-legend">
-        <span><i style="background:var(--c0)"></i>0</span>
-        <span><i style="background:var(--c1)"></i>1</span>
-        <span><i style="background:var(--c2)"></i>2</span>
+        <span><i style="background:var(--c0)"></i>none</span>
+        <span><i style="background:var(--c2)"></i>1–2</span>
         <span><i style="background:var(--c3)"></i>3–4</span>
         <span><i style="background:var(--c5)"></i>5–6</span>
         <span><i style="background:var(--c7)"></i>7+</span>
@@ -94,16 +83,9 @@
       </div>
     </section>
     <p class="legend">
-      <span class="dot sun sure"></span>Almost surely sunny (90%+)
-      <span class="dot sun"></span>Likely sunny (75%+)
-      <span class="dot maybe"></span>Maybe
-      <span class="dot partly"></span>Partly
-      <span class="dot cloud"></span>Cloudy
-      <span class="dot rain"></span>Rain
-      <span class="dot snow"></span>Snow
-      <br><b>Yellow</b> = the main forecast says sunny <i>and</i> at least 75% of 51 ECMWF scenarios agree (deep gold = 90%+). <b>Maybe</b> = they disagree,
-      or it's beyond the 10 days we can check. Faded days are outside your “Within” window.
-      Weather by <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a>,
+      ☀️ Sunny &nbsp; 🌤️ Maybe sunny &nbsp; ☁️ Cloudy &nbsp; 🌧️ Rain &nbsp; ❄️ Snow<br>
+      “Sunny” is shown only when several independent forecasts agree. Forecasts more than 5 days ahead can still change.<br>
+      Weather by <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a> (ECMWF, DWD and others),
       places by <a href="https://www.geonames.org/" target="_blank" rel="noopener">GeoNames</a>.
     </p>
   </main>
@@ -116,27 +98,9 @@
       </div>
       <button class="icon-btn close" data-close aria-label="Close">✕</button>
     </div>
-    <div class="actions">
-      <a id="directionsLink" class="btn" target="_blank" rel="noopener">🚗 Directions</a>
-      <a id="mapsLink" class="btn ghost" target="_blank" rel="noopener">🗺️ Open map</a>
-    </div>
-    <p id="ensembleNote" class="muted small"></p>
-    <div class="table-wrap">
-      <table class="days">
-        <thead>
-          <tr><th>Day</th><th></th><th>Sun</th><th title="Chance of sun from 51 forecast scenarios">Sun chance</th><th>Rain</th><th>Temp</th></tr>
-        </thead>
-        <tbody id="detailRows"></tbody>
-      </table>
-    </div>
-    <p class="muted small">
-      <b>Sun</b> = forecast sunshine hours and ☁ average cloud cover 9:00–17:00.
-      <b>Sun chance</b> = share of 51 ECMWF ensemble scenarios where daytime cloud stays at or below your
-      “Sunny means” level (60% by default). A day is <b>yellow</b> only when the main forecast is sunny with low cloud
-      <i>and</i> the sun chance is 75%+ (deep gold at 90%+). It's <b>maybe</b> (striped) when only one of them says sunny
-      (or 50%+ of scenarios do). Reliability: <span class="conf high">●</span> high (0–2 days),
-      <span class="conf med">●</span> medium (3–6), <span class="conf low">●</span> low (7+).
-    </p>
+    <a id="directionsLink" class="btn directions" target="_blank" rel="noopener">🚗 Directions</a>
+    <ul id="detailRows" class="rows"></ul>
+    <p class="muted small">Days further ahead (faded) can still change – check again before you go.</p>
   </dialog>
 
   <dialog id="locationDialog" class="sheet">

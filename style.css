@@ -7,8 +7,7 @@
   --accent: #f59e0b;
   --accent-text: #7a4b00;
   --sun: #fcd34d;
-  --sure: #f59e0b;
-  --partly: #e5e0c8;
+  --maybe: #fdf3c4;
   --cloud: #cbd5e1;
   --rain: #60a5fa;
   --snow: #c7d2fe;
@@ -30,9 +29,8 @@
     --border: #2e333b;
     --accent-text: #fcd34d;
     --cloud: #4b5563;
-    --partly: #5c5640;
-    --sun: #ca8a04;
-    --sure: #fbbf24;
+    --maybe: #4a4326;
+    --sun: #fbbf24;
     --rain: #2563eb;
     --snow: #6366f1;
     --na: #262a31;
@@ -109,29 +107,23 @@ main { padding: 12px 16px 24px; max-width: 760px; margin: 0 auto; }
 .card-head { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
 .card-name { font-weight: 650; font-size: 16px; }
 .card-dist { color: var(--muted); font-size: 13px; white-space: nowrap; }
-.card-line { font-size: 13px; margin: 4px 0 8px; }
-.badge {
-  display: inline-block; background: var(--sun); color: #3b2500; font-weight: 700;
-  border-radius: 999px; padding: 1px 8px; margin-right: 4px; font-size: 12px;
-}
-.badge.week { background: var(--c7); color: #fff; }
-.badge.none { background: var(--cloud); color: var(--text); }
+.card-line { font-size: 14px; margin: 4px 0 8px; }
 
-.strip { display: grid; grid-template-columns: repeat(16, 1fr); gap: 2px; }
+/* day strip: one tile per day with an icon */
+.strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(28px, 1fr)); gap: 3px; }
 .strip .d {
-  height: 22px; border-radius: 4px; background: var(--na);
-  font-size: 9px; display: flex; align-items: flex-end; justify-content: center; color: rgba(0,0,0,.55);
+  border-radius: 8px; background: var(--na); padding: 3px 0 2px;
+  display: flex; flex-direction: column; align-items: center; line-height: 1.1;
 }
-.strip .d.out { opacity: .3; }
+.strip .d span { font-size: 17px; }
+.strip .d small { font-size: 9px; color: var(--muted); margin-top: 1px; }
 .strip .d.today { outline: 2px solid var(--text); outline-offset: -2px; }
 .sun { background: var(--sun) !important; }
-.sun.sure { background: var(--sure) !important; }
-.partly { background: var(--partly) !important; }
+.maybe { background: var(--maybe) !important; }
 .cloud { background: var(--cloud) !important; }
 .rain { background: var(--rain) !important; }
-.maybe { background: repeating-linear-gradient(135deg, var(--sun) 0 3px, var(--na) 3px 6px) !important; }
 .snow { background: var(--snow) !important; }
-.strip-labels { display: grid; grid-template-columns: repeat(16, 1fr); gap: 2px; font-size: 9px; color: var(--muted); text-align: center; margin-top: 2px; }
+.strip .d.sun small, .strip .d.rain small { color: #1f2328; }
 
 .empty { text-align: center; color: var(--muted); padding: 24px 8px; }
 
@@ -141,9 +133,7 @@ main { padding: 12px 16px 24px; max-width: 760px; margin: 0 auto; }
 .leaflet-popup-content { font: 13px/1.4 system-ui, sans-serif; }
 .leaflet-popup-content button { margin-top: 6px; }
 
-.legend { font-size: 12px; color: var(--muted); margin-top: 16px; line-height: 1.8; }
-.dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin: 0 3px 0 8px; vertical-align: middle; }
-.dot:first-child { margin-left: 0; }
+.legend { font-size: 13px; color: var(--muted); margin-top: 16px; line-height: 1.8; }
 
 dialog.sheet {
   width: 100%; max-width: 640px; max-height: 92vh; margin: auto auto 0;
@@ -165,17 +155,22 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
 .btn.ghost { background: transparent; border: 1px solid var(--border); color: var(--text); }
 #useGps { width: 100%; margin: 12px 0 4px; }
 
-.table-wrap { overflow-x: auto; }
-table.days { width: 100%; border-collapse: collapse; font-size: 13px; }
-table.days th { text-align: left; font-size: 11px; color: var(--muted); font-weight: 600; padding: 4px; }
-table.days td { padding: 6px 4px; border-top: 1px solid var(--border); white-space: nowrap; }
-table.days tr.sunny-row td:first-child { box-shadow: inset 4px 0 0 var(--sun); }
-table.days tr.maybe-row td:first-child { box-shadow: inset 4px 0 0 var(--partly); }
-.conf { font-size: 10px; }
-.conf.high { color: #16a34a; }
-.conf.med { color: #d97706; }
-.conf.low { color: #dc2626; }
-.pill { display: inline-block; min-width: 34px; text-align: center; border-radius: 6px; padding: 1px 4px; font-weight: 600; }
+/* day-by-day list in the detail sheet */
+.directions { display: block; margin: 12px 0; }
+.rows { list-style: none; margin: 0 0 8px; padding: 0; }
+.rows .row {
+  display: grid; grid-template-columns: 90px 30px 1fr auto; align-items: center; gap: 6px;
+  padding: 9px 10px; margin-bottom: 4px; border-radius: 10px; background: var(--na) !important;
+}
+.rows .row.sun { background: var(--sun) !important; color: #1f2328; }
+.rows .row.maybe { background: var(--maybe) !important; }
+.rows .row.rain { background: var(--rain) !important; color: #0b1a33; }
+.rows .row.far { opacity: .7; }
+.row-day { font-weight: 600; }
+.row-icon { font-size: 20px; text-align: center; }
+.row-label { font-weight: 600; }
+.row-temp { font-weight: 600; white-space: nowrap; }
+.row-temp small { font-weight: 400; opacity: .75; }
 
 #placeSearch {
   width: 100%; font: inherit; font-size: 16px; padding: 10px 12px; border-radius: 10px;

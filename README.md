@@ -27,25 +27,23 @@ Forecasts are cached for an hour.
    - **iPhone (Safari):** Share → *Add to Home Screen*.
 4. Allow location access when asked.
 
-## How "sunny" is decided
+## How the weather is decided
 
-Sunshine-hour forecasts turned out to be unreliable (some models report 10 h of "sun" under 100%
-cloud), so sun is judged mainly by **average cloud cover between 9:00 and 17:00**. Two independent
-checks must agree before a day is **yellow**:
+Each day shows one simple verdict: ☀️ Sunny, 🌤️ Maybe sunny, ☁️ Cloudy, 🌧️ Rain or ❄️ Snow.
 
-1. **Main forecast:** daytime cloud ≤ 60% (your "Sunny means" level), enough sunshine hours, and
-   chance of rain below 40%.
-2. **Sun chance:** at least 75% of the 51 ECMWF ensemble scenarios keep daytime cloud ≤ 60%
-   (deep gold when 90%+).
+- **Sunny** — the main forecast has ≤ 60% cloud between 9:00 and 17:00 (and little rain risk),
+  **and** at least 75% of the 51 ECMWF ensemble scenarios agree.
+- **Maybe sunny** — only one of the two says sunny (or 50–75% of the scenarios do).
+- **Rain** — at least 1 mm with a 50%+ chance, or 5 mm or more.
+- **Cloudy** — everything else.
 
-If only one of them says sunny (or 50–75% of scenarios do), the day is **maybe sunny** (striped).
-Days with ≥1 mm of likely precipitation are rain or snow. Cards show how sure the sunny spell is
-(average sun chance), and "Most reliable sun" sorts by expected sunny days.
+Cloud cover is used rather than "sunshine hours", because some models report hours of sunshine
+under 100% cloud. `tests/verify.py` compares these verdicts with independent forecasters
+(MET Norway / Yr, wttr.in) and backtests them against satellite-measured sunshine.
 
 Each ensemble scenario counts against Open-Meteo's free limit (600 calls/minute, 10,000/day), so the
-sun chance is checked for your location plus the ~80 most promising towns, for the first 10 days.
-Days beyond that, and towns that weren't checked, can only be "maybe". Tapping any town checks it
-on demand. If the per-minute limit is hit, the app waits a minute and continues.
+double-check runs for your location plus the ~80 most promising towns. Towns that weren't checked
+can only be "maybe"; tapping one checks it on demand. If the per-minute limit is hit, the app waits a minute and continues.
 
 ## Run locally
 
