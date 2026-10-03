@@ -1,0 +1,28 @@
+name: Live weather check
+
+on:
+  push:
+    branches: [main, claude/sunny-weather-location-finder-keggwf]
+  workflow_dispatch:
+
+jobs:
+  live-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm i --no-save playwright@1.56.1 && npx playwright install --with-deps chromium
+      - name: Run app against live Open-Meteo forecast
+        run: |
+          python3 -m http.server 8765 &
+          sleep 1
+          node tests/live-check.js | tee live-check.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-check
+          path: |
+            live-check.txt
+            live-check.png
