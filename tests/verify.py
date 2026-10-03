@@ -36,14 +36,14 @@ def day_mean(times, vals, day, h0=9, h1=16):
 
 # ---------- the app's rule (keep in sync with app.js classify) ----------
 def app_verdict(cloud, sun_ratio, rain_sum, rain_prob, chance):
-    wet = (rain_sum or 0) >= 1
-    if wet and (rain_prob or 0) >= 50: return "rain"
-    main = sun_ratio >= 0.65 and (rain_prob or 0) < 40 and (cloud is None or cloud <= MAX_CLOUD)
+    rs, rp = rain_sum or 0, rain_prob or 0
+    if rs >= 5 or (rs >= 1 and rp >= 50): return "rain"
+    main = cloud is not None and cloud <= MAX_CLOUD and sun_ratio >= 0.5 and rp < 40
     if chance is not None:
         if main and chance >= SURE: return "sun"
         if main or chance >= MAYBE: return "maybe"
     elif main: return "maybe"
-    return "rain" if wet else "cloud"
+    return "cloud"
 
 def simple(v):  # collapse to sun / cloud / rain for comparison
     return {"sun": "SUN", "maybe": "maybe", "partly": "cloud", "cloud": "cloud", "rain": "RAIN", "snow": "RAIN"}[v]

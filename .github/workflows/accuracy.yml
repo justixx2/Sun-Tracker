@@ -1,0 +1,20 @@
+name: Accuracy check
+
+# Compares Sun Tracker's verdicts with independent forecasters (Yr, wttr.in) and backtests
+# the last ~4 weeks against satellite-measured sunshine. Run it from the Actions tab.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, claude/sunny-weather-location-finder-keggwf]
+    paths: [tests/verify.py]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -u tests/verify.py | tee accuracy.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: accuracy
+          path: accuracy.txt
