@@ -1,0 +1,11 @@
+name: Temporary verification
+on:
+  push:
+    branches: [claude/sunny-weather-location-finder-keggwf]
+    paths: [.github/workflows/probe.yml, tests/verify.py]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 tests/verify.py
