@@ -1,0 +1,25 @@
+name: Temporary API probe
+on:
+  push:
+    branches: [claude/sunny-weather-location-finder-keggwf]
+    paths: [.github/workflows/probe.yml]
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          E=https://ensemble-api.open-meteo.com/v1/ensemble
+          echo "== 2 locations hourly cloud_cover ecmwf_ifs025"
+          curl -s "$E?latitude=54.02,50.06&longitude=23.97,19.94&hourly=cloud_cover&models=ecmwf_ifs025&forecast_days=10&timezone=auto" | python3 -c "import sys,json;d=json.load(sys.stdin);print(type(d).__name__, len(d) if isinstance(d,list) else '', (d[0] if isinstance(d,list) else d).keys(), len([k for k in (d[0] if isinstance(d,list) else d)['hourly'] if k.startswith('cloud')]))"
+          echo "== daily vars on ensemble"
+          curl -s "$E?latitude=54.02&longitude=23.97&daily=cloud_cover_mean,sunshine_duration&models=ecmwf_ifs025&forecast_days=10&timezone=auto" | head -c 600; echo
+          echo "== hourly sunshine_duration / direct_radiation on ensemble"
+          curl -s "$E?latitude=54.02&longitude=23.97&hourly=sunshine_duration,direct_radiation,cloud_cover&models=ecmwf_ifs025&forecast_days=3&timezone=auto" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('reason') or [k for k in d['hourly'] if 'member01' in k or 'member' not in k]); h=d.get('hourly',{}); print('sun m01', h.get('sunshine_duration_member01',[])[30:42]); print('cc m01', h.get('cloud_cover_member01',[])[30:42])"
+          echo "== aifs ensemble"
+          curl -s "$E?latitude=54.02&longitude=23.97&hourly=cloud_cover&models=ecmwf_aifs025&forecast_days=10" | head -c 300; echo
+          echo "== 100 locations ensemble one request"
+          LAT=$(python3 -c "print(','.join(str(50+i*0.05) for i in range(100)))"); LON=$(python3 -c "print(','.join(str(20+i*0.05) for i in range(100)))")
+          curl -s -o big.json -w "status %{http_code} size %{size_download} time %{time_total}\n" "$E?latitude=$LAT&longitude=$LON&daily=cloud_cover_mean&hourly=cloud_cover&models=ecmwf_ifs025&forecast_days=10"
+          head -c 300 big.json; echo
+          echo "== docs"
+          for p in ensemble-api pricing; do echo "--- $p"; curl -s https://open-meteo.com/en/docs/$p https://open-meteo.com/en/$p | python3 -c "import sys,re,html;t=html.unescape(re.sub(r'<[^>]+>',' ',sys.stdin.read()));t=re.sub(r'\s+',' ',t);[print('>>',m) for m in re.findall(r'.{0,250}(?:weight|counted as|API calls per|calls per minute|per minute|fractional|daily aggregat).{0,250}',t)][:12]"; done
