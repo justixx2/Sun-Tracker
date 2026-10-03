@@ -7,39 +7,14 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - shell: python
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm i --no-save playwright@1.56.1 && npx playwright install --with-deps chromium
+      - name: Druskininkai, home detail (run 2)
+        env: { LAT: "54.02", LON: "23.97", DETAIL: home }
         run: |
-          import json, urllib.request, statistics as st
-          def get(url):
-              try:
-                  with urllib.request.urlopen(url, timeout=90) as r: return json.load(r)
-              except urllib.error.HTTPError as e: return {"error": e.read().decode()[:200]}
-          E = "https://ensemble-api.open-meteo.com/v1/ensemble"
-          F = "https://api.open-meteo.com/v1/forecast"
-          for name, LAT, LON in [("Druskininkai",54.02,23.97), ("Krakow",50.06,19.94), ("Vaslui RO",46.64,27.73)]:
-              base = f"latitude={LAT}&longitude={LON}&timezone=auto&forecast_days=10"
-              d = get(f"{E}?{base}&models=ecmwf_ifs025&hourly=cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high&daily=sunshine_duration")
-              if "error" in d: print(name, d["error"]); continue
-              m = get(f"{F}?{base}&daily=sunshine_duration,daylight_duration&hourly=cloud_cover,cloud_cover_low,cloud_cover_mid,cloud_cover_high")
-              h = d["hourly"]; dd = d["daily"]
-              have = sorted({k.split('_member')[0] for k in h if k!='time'})
-              print(f"\n##### {name}  (ensemble hourly vars available: {have})")
-              print("day    main:sun%/cloud/low  | A sun>=65%  B cld<=50  C cld<=60  D max(low,mid)<=40  E max(low,mid)<=40 & cld<=80  F sun>=65 & cld<=70")
-              for di, day in enumerate(dd["time"]):
-                  idx = [k for k,t in enumerate(h["time"]) if t.startswith(day) and 9 <= int(t[11:13]) <= 16]
-                  def mean(key):
-                      v=[h[key][k] for k in idx if key in h and h[key][k] is not None]; return st.mean(v) if v else None
-                  members = ["" ] + [f"_member{i:02d}" for i in range(1,51)]
-                  dl = m["daily"]["daylight_duration"][di]
-                  res = {c:0 for c in "ABCDEF"}; n=0
-                  for suf in members:
-                      cc = mean("cloud_cover"+suf); lo = mean("cloud_cover_low"+suf); mi = mean("cloud_cover_mid"+suf)
-                      sd = dd.get("sunshine_duration"+suf,[None]*20)[di]
-                      if cc is None or sd is None: continue
-                      n+=1; lm = max(lo or 0, mi or 0); sr = sd/dl
-                      res["A"] += sr>=0.65; res["B"] += cc<=50; res["C"] += cc<=60; res["D"] += lm<=40
-                      res["E"] += (lm<=40 and cc<=80); res["F"] += (sr>=0.65 and cc<=70)
-                  mh = m["hourly"]; midx=[k for k,t in enumerate(mh["time"]) if t.startswith(day) and 9<=int(t[11:13])<=16]
-                  mm = lambda key: round(st.mean([mh[key][k] for k in midx]))
-                  ms = m["daily"]["sunshine_duration"][di]
-                  print(f"{day[5:]}  {round(100*ms/dl):3d}%/{mm('cloud_cover'):3d}/{mm('cloud_cover_low'):3d}   | " + "  ".join(f"{c}:{round(100*res[c]/max(n,1)):3d}%" for c in "ABCDEF") + f"  (n={n})")
+          python3 -m http.server 8765 >/dev/null 2>&1 &
+          sleep 1
+          node tests/live-check.js

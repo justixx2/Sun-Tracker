@@ -62,9 +62,9 @@
       </label>
       <label>Sunny means
         <select id="strictness">
-          <option value="0.5">50%+ sunshine</option>
-          <option value="0.65">65%+ sunshine</option>
-          <option value="0.8">80%+ sunshine</option>
+          <option value="0.5">Some sun (≤75% cloud)</option>
+          <option value="0.65">Mostly sunny (≤60% cloud)</option>
+          <option value="0.8">Clear skies (≤45% cloud)</option>
         </select>
       </label>
     </div>
@@ -130,11 +130,11 @@
       </table>
     </div>
     <p class="muted small">
-      <b>Sun</b> = expected hours of sunshine (and % of daylight).
-      <b>Sun chance</b> = share of 51 ECMWF ensemble scenarios where the day reaches your sunshine level
-      (e.g. 65% of daylight). A day is <b>sunny</b> only when the main forecast says sunny <i>and</i> the sun chance
-      is 75%+ (deep gold at 90%+). It's <b>maybe</b> (striped) when only the main forecast says sunny, or when 50%+ of scenarios show sun but the main forecast doesn't.
-      <b>Rain</b> = chance of precipitation. Reliability: <span class="conf high">●</span> high (0–2 days),
+      <b>Sun</b> = forecast sunshine hours and ☁ average cloud cover 9:00–17:00.
+      <b>Sun chance</b> = share of 51 ECMWF ensemble scenarios where daytime cloud stays at or below your
+      “Sunny means” level (60% by default). A day is <b>yellow</b> only when the main forecast is sunny with low cloud
+      <i>and</i> the sun chance is 75%+ (deep gold at 90%+). It's <b>maybe</b> (striped) when only one of them says sunny
+      (or 50%+ of scenarios do). Reliability: <span class="conf high">●</span> high (0–2 days),
       <span class="conf med">●</span> medium (3–6), <span class="conf low">●</span> low (7+).
     </p>
   </dialog>

@@ -116,8 +116,28 @@ function selectPlaces(origin, radiusKm) {
 }
 
 // ---------- Weather ----------
-function normalizeDaily(d) {
+// Sunshine-duration numbers count sun through thin high cloud generously (some models report
+// 10 h of "sun" under 100% cloud), so sunny days are judged mainly by daytime cloud cover.
+const DAY_HOURS = [9, 16];   // local hours averaged for "daytime" cloud cover
+
+// Average of hourly values per date over DAY_HOURS: {date: mean}
+function daytimeMeans(times, values) {
+  const acc = {};
+  times.forEach((t, k) => {
+    const hour = +t.slice(11, 13), v = values[k];
+    if (hour < DAY_HOURS[0] || hour > DAY_HOURS[1] || v == null) return;
+    const a = acc[t.slice(0, 10)] || (acc[t.slice(0, 10)] = [0, 0]);
+    a[0] += v; a[1]++;
+  });
+  const out = {};
+  for (const [d, [sum, n]] of Object.entries(acc)) out[d] = Math.round(sum / n);
+  return out;
+}
+
+function normalizeDaily(d, h) {
+  const cloud = h?.cloud_cover ? daytimeMeans(h.time, h.cloud_cover) : {};
   return d.time.map((date, i) => ({
+    cloud: cloud[date],
     date,
     code: d.weather_code?.[i],
     tmax: d.temperature_2m_max?.[i],
@@ -156,22 +176,22 @@ async function fetchMulti(api, batch, extra, onWait) {
 }
 
 async function fetchBatch(batch, onWait) {
-  const arr = await fetchMulti(FORECAST_API, batch, { daily: DAILY_VARS.join(','), forecast_days: String(FORECAST_DAYS) }, onWait);
-  return arr.map(item => item && item.daily ? normalizeDaily(item.daily) : null);
+  const arr = await fetchMulti(FORECAST_API, batch,
+    { daily: DAILY_VARS.join(','), hourly: 'cloud_cover', forecast_days: String(FORECAST_DAYS) }, onWait);
+  return arr.map(item => item && item.daily ? normalizeDaily(item.daily, item.hourly) : null);
 }
 
-function parseEnsemble(d) {
-  const keys = Object.keys(d).filter(k => k.startsWith('sunshine_duration'));
-  return {
-    dates: d.time,
-    members: d.time.map((_, i) => keys.map(k => d[k][i]).filter(v => v != null).map(Math.round)),
-  };
+// members[day] = daytime cloud cover (%) of each ensemble member
+function parseEnsemble(h) {
+  const per = Object.keys(h).filter(k => k.startsWith('cloud_cover')).map(k => daytimeMeans(h.time, h[k]));
+  const dates = [...new Set(h.time.map(t => t.slice(0, 10)))];
+  return { dates, members: dates.map(d => per.map(m => m[d]).filter(v => v != null)) };
 }
 
 async function fetchEnsembleBatch(batch, onWait) {
   const arr = await fetchMulti(ENSEMBLE_API, batch,
-    { daily: 'sunshine_duration', models: 'ecmwf_ifs025', forecast_days: String(ENS_DAYS) }, onWait);
-  return arr.map(item => item && item.daily ? parseEnsemble(item.daily) : null);
+    { hourly: 'cloud_cover', models: 'ecmwf_ifs025', forecast_days: String(ENS_DAYS) }, onWait);
+  return arr.map(item => item && item.hourly ? parseEnsemble(item.hourly) : null);
 }
 
 // Pick which towns get the (expensive) sun-chance check: your location, the nearest towns
@@ -219,16 +239,21 @@ async function fetchForecasts(places, onProgress, onWait) {
 
 // ---------- Analysis ----------
 const sunRatio = day => day.daylight > 0 ? day.sun / day.daylight : 0;
+// Highest daytime cloud cover that still counts as sunny, per "Sunny means" level:
+// 0.5 -> 75%, 0.65 -> 60%, 0.8 -> 45%
+const maxCloud = threshold => Math.round(125 - 100 * threshold);
 const mainSaysSunny = (day, threshold) =>
-  day.sun != null && day.daylight != null && sunRatio(day) >= threshold && (day.rainProb ?? 0) < 40;
+  day.sun != null && day.daylight != null && sunRatio(day) >= threshold && (day.rainProb ?? 0) < 40 &&
+  (day.cloud == null || day.cloud <= maxCloud(threshold));
 
-// % of ensemble scenarios where at least `threshold` of the daylight is sunny (null = unknown).
+// % of ensemble scenarios whose daytime cloud cover is low enough to count as sunny (null = unknown).
 function sunChance(ens, day, threshold) {
-  if (!ens || !day.daylight) return null;
+  if (!ens) return null;
   const i = ens.dates.indexOf(day.date);
   const members = i >= 0 ? ens.members[i] : null;
   if (!members || !members.length) return null;
-  return Math.round(100 * members.filter(v => v / day.daylight >= threshold).length / members.length);
+  const limit = maxCloud(threshold);
+  return Math.round(100 * members.filter(c => c <= limit).length / members.length);
 }
 
 // sun   = main forecast sunny AND most scenarios agree
@@ -246,7 +271,8 @@ function classify(day, threshold, chance, ensMode) {
   } else if (main) {
     return ensMode === 'done' ? 'maybe' : 'sun';
   }
-  if (sunRatio(day) >= threshold * 0.55) return 'partly';
+  const partly = day.cloud != null ? day.cloud <= 80 : sunRatio(day) >= threshold * 0.55;
+  if (partly) return 'partly';
   return wet ? 'rain' : 'cloud';
 }
 
@@ -442,7 +468,7 @@ function pillStyle(pct, kind) {
 
 function saveCache() {
   if (!state.cacheKey) return;
-  store.set('forecastCache', {
+  store.set('forecastCache2', {
     key: state.cacheKey, ts: state.fetchedAt, places: state.places,
     forecasts: state.forecasts, ens: state.ens, ensMode: state.ensMode,
   });
@@ -457,16 +483,16 @@ function openDetail(idx) {
     (p.pop ? ` · pop. ${p.pop.toLocaleString()}` : '');
   $('#directionsLink').href = `https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lon}`;
   $('#mapsLink').href = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(p.name + (p.cc ? ', ' + p.cc : ''))}`;
-  const pct = Math.round(+state.settings.strictness * 100);
+  const limit = maxCloud(+state.settings.strictness);
   const renderRows = loading => {
     $('#detailRows').innerHTML = r.days.map((d, i) => {
       const hours = d.sun != null ? (d.sun / 3600).toFixed(1) : '–';
-      const share = d.sun != null && d.daylight ? Math.round(100 * d.sun / d.daylight) : null;
+      const cloud = d.cloud;
       const sc = r.chances[i];
       return `<tr class="${r.kinds[i] === 'sun' ? 'sunny-row' : r.kinds[i] === 'maybe' ? 'maybe-row' : ''}">
         <td><span class="conf ${confidence(i)}">●</span> ${esc(fmtDay(d.date))}</td>
         <td><span class="dot ${dayClass(r, i)}" style="margin:0"></span></td>
-        <td>${hours} h${share != null ? ` <span class="muted small">(${share}%)</span>` : ''}</td>
+        <td>${hours} h${cloud != null ? ` <span class="muted small">☁${cloud}%</span>` : ''}</td>
         <td>${sc != null ? `<span class="pill" style="${pillStyle(sc, 'sun')}">${sc}%</span>` : loading ? '…' : '–'}</td>
         <td>${d.rainProb != null ? `<span class="pill" style="${pillStyle(d.rainProb, 'rain')}">${d.rainProb}%</span>` : '–'}</td>
         <td>${d.tmax != null ? Math.round(d.tmax) : '–'}° / ${d.tmin != null ? Math.round(d.tmin) : '–'}°</td>
@@ -476,7 +502,7 @@ function openDetail(idx) {
   const note = () => {
     const ens = state.ens[pi];
     $('#ensembleNote').textContent = ens
-      ? `Sun chance = share of ${ens.members[0]?.length || 51} forecast scenarios with ${pct}%+ sunshine (first ${ENS_DAYS} days).`
+      ? `Sun chance = share of ${ens.members[0]?.length || 51} forecast scenarios with ${limit}% or less cloud between 9:00 and 17:00 (first ${ENS_DAYS} days).`
       : 'Sun probabilities are unavailable right now – striped days are unconfirmed.';
   };
   $('#detail').showModal();
@@ -534,7 +560,7 @@ async function refresh({ force = false } = {}) {
   try {
     await loadCities();
     const key = cacheKey();
-    const cached = store.get('forecastCache');
+    const cached = store.get('forecastCache2');
     if (!force && cached && cached.key === key && Date.now() - cached.ts < CACHE_TTL_MS) {
       state.places = cached.places; state.forecasts = cached.forecasts; state.fetchedAt = cached.ts;
       state.ens = cached.ens || []; state.ensMode = cached.ensMode || 'failed'; state.cacheKey = key;

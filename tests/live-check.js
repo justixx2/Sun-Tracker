@@ -44,7 +44,8 @@ const LAT = +(process.env.LAT || 50.06), LON = +(process.env.LON || 19.94);
     `${e.querySelector('.card-name').innerText} (${e.querySelector('.card-dist').innerText}): ${e.querySelector('.card-line').innerText}`));
   console.log('\nMost reliable sun:\n' + longest.join('\n'));
 
-  const first = await page.$('#results .card');
+  // DETAIL=home shows the day-by-day table for your own location instead of the top result.
+  const first = await page.$(process.env.DETAIL === 'home' ? '#homeCard .card' : '#results .card');
   if (first) {
     await first.click();
     await page.waitForFunction(() => !document.querySelector('#ensembleNote').textContent.startsWith('Loading'), null, { timeout: 60000 });
