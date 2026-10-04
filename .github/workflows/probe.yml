@@ -2,24 +2,29 @@ name: Temporary API probe
 on:
   push:
     branches: [claude/sunny-weather-location-finder-keggwf]
-    paths: [.github/workflows/probe.yml, tests/audit-hourly.py]
+    paths: [.github/workflows/probe.yml, tests/audit-hourly.py, app.js]
 jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - run: python3 -u tests/audit-hourly.py
-  app-today:
+  app-druskininkai:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
       - run: npm i --no-save playwright@1.56.1 && npx playwright install --with-deps chromium
-      - name: App, Druskininkai, today hour by hour
+      - name: Today hour by hour
         env: { LAT: "54.02", LON: "23.97", DETAIL: home, HOUR_DAY: "0" }
         run: |
           set -o pipefail
           python3 -m http.server 8765 >/dev/null 2>&1 &
           sleep 1
           node tests/live-check.js | sed -n '/Detail for/,/45-day/p'
+      - name: Tomorrow hour by hour
+        env: { LAT: "54.02", LON: "23.97", DETAIL: home, HOUR_DAY: "1" }
+        run: |
+          set -o pipefail
+          node tests/live-check.js | sed -n '/hour by hour/,/45-day/p'

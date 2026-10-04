@@ -59,6 +59,17 @@ const dateOf = iso => new Date(iso + 'T12:00:00');
 const fmtDay = iso => dateOf(iso).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' });
 const fmtWeekday = iso => dateOf(iso).toLocaleDateString(undefined, { weekday: 'short' });
 const fmtRange = (a, b) => a === b ? fmtDay(a) : `${fmtDay(a)} – ${fmtDay(b)}`;
+// Local date ('YYYY-MM-DD') and hour at a place, from its UTC offset (seconds). Phones can be in
+// another time zone than the town being looked at, so never use the device clock for this.
+const localNow = offset => new Date(Date.now() + (offset || 0) * 1000);
+const localDate = (offset, plusDays = 0) => new Date(localNow(offset).getTime() + plusDays * 864e5).toISOString().slice(0, 10);
+const localHour = offset => localNow(offset).getUTCHours();
+// 'Today' / 'Tomorrow' / 'Mon 6' for a forecast day, judged by the place's own calendar
+function dayLabel(d, short = false) {
+  if (d.date === localDate(d.offset)) return 'Today';
+  if (d.date === localDate(d.offset, 1)) return short ? fmtWeekday(d.date) : 'Tomorrow';
+  return short ? fmtWeekday(d.date) : fmtDay(d.date);
+}
 
 // ---------- State ----------
 const state = {
@@ -137,11 +148,11 @@ function daytimeMeans(times, values) {
   return out;
 }
 
-function normalizeDaily(d, h) {
+function normalizeDaily(d, h, offset) {
   const cloud = h?.cloud_cover ? daytimeMeans(h.time, h.cloud_cover) : {};
   return d.time.map((date, i) => ({
     cloud: cloud[date],
-    date,
+    date, offset,
     code: d.weather_code?.[i],
     tmax: d.temperature_2m_max?.[i],
     tmin: d.temperature_2m_min?.[i],
@@ -181,7 +192,7 @@ async function fetchMulti(api, batch, extra, onWait) {
 async function fetchBatch(batch, onWait) {
   const arr = await fetchMulti(FORECAST_API, batch,
     { daily: DAILY_VARS.join(','), hourly: 'cloud_cover', forecast_days: String(FORECAST_DAYS) }, onWait);
-  return arr.map(item => item && item.daily ? normalizeDaily(item.daily, item.hourly) : null);
+  return arr.map(item => item && item.daily ? normalizeDaily(item.daily, item.hourly, item.utc_offset_seconds) : null);
 }
 
 // members[day] = daytime cloud cover (%) of each ensemble member
@@ -266,7 +277,8 @@ function classify(day, chance, ensMode) {
     if (main && chance >= SURE) return 'sun';
     if (main || chance >= MAYBE) return 'maybe';
   } else if (main) {
-    return ensMode === 'done' ? 'maybe' : 'sun';
+    // Not double-checked (yet): only a failed check falls back to the main forecast alone.
+    return ensMode === 'failed' ? 'sun' : 'maybe';
   }
   return 'cloud';
 }
@@ -324,8 +336,8 @@ function setStatus(html, kind = '') {
 
 function stripHtml(r) {
   return '<div class="strip">' + r.days.slice(0, r.windowDays).map((d, i) =>
-    `<div class="d ${r.kinds[i]}${i === 0 ? ' today' : ''}" title="${esc(fmtDay(d.date) + ': ' + LABEL[r.kinds[i]])}">` +
-    `<span>${ICON[r.kinds[i]]}</span><small>${i === 0 ? 'Today' : esc(fmtWeekday(d.date))}</small></div>`).join('') + '</div>';
+    `<div class="d ${r.kinds[i]}${dayLabel(d) === 'Today' ? ' today' : ''}" title="${esc(fmtDay(d.date) + ': ' + LABEL[r.kinds[i]])}">` +
+    `<span>${ICON[r.kinds[i]]}</span><small>${esc(dayLabel(d, true))}</small></div>`).join('') + '</div>';
 }
 
 function headline(r) {
@@ -365,6 +377,7 @@ function render() {
     : '';
   $('#results').innerHTML = matches.length
     ? matches.map((r, i) => cardHtml(r, i + (home ? 1 : 0))).join('')
+    : state.ensMode === 'pending' ? ''
     : `<div class="empty">No places within ${s.radius} km with ${what} in the next ${s.window} days.<br>Try a bigger distance or fewer days in a row.</div>`;
   updateLocationText();
   if (!$('#mapView').hidden) renderMap();
@@ -443,7 +456,7 @@ function openDetail(idx) {
   const renderRows = () => {
     $('#detailRows').innerHTML = r.days.map((d, i) => `
       <li class="row ${r.kinds[i]}${i >= 5 ? ' far' : ''}" data-day="${i}">
-        <span class="row-day">${i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : esc(fmtDay(d.date))}</span>
+        <span class="row-day">${esc(dayLabel(d))}</span>
         <span class="row-icon">${ICON[r.kinds[i]]}</span>
         <span class="row-label">${LABEL[r.kinds[i]]}</span>
         <span class="row-temp">${d.tmax != null ? Math.round(d.tmax) + '°' : ''}<small>${d.tmin != null ? ' ' + Math.round(d.tmin) + '°' : ''}</small></span>
@@ -467,57 +480,57 @@ function openDetail(idx) {
 }
 
 // ---------- Hour-by-hour sheet ----------
-// Everything shown per hour comes from the 51 ECMWF scenarios, so the label, sun chance and rain
-// chance always agree. (A single model's hourly cloud cover jumps around too much: clear at 09:00,
-// overcast at 10:00, clear again at 12:00.) The main model only adds temperature and the type of
-// precipitation (thunder, snow).
+// Label and sun chance come from the 51 ECMWF scenarios' cloud cover (a single model's hourly
+// cloud jumps around: clear at 09:00, overcast at 10:00). Rain chance is Open-Meteo's hourly
+// precipitation probability: it tracks Yr closely, it is updated more often than the ECMWF
+// scenarios, and it is the same number the daily "Rain" verdict uses, so the two views agree.
+// The main model adds temperature and the type of precipitation (thunder, snow).
 function hourCondition(h) {
-  const night = !h.isDay, c = h.code;
-  if ((h.rainChance ?? 0) >= 50) {
+  const night = !h.isDay, c = h.code ?? 0, wet = c >= 51, prob = h.rainChance ?? 0;
+  if (prob >= 50 && wet) {
     if (c >= 95) return ['⛈️', 'Thunderstorm'];
     if ((c >= 71 && c <= 77) || c === 85 || c === 86) return ['🌨️', 'Snow'];
     return ['🌧️', 'Rain'];
   }
+  if (prob >= 50 || (prob >= 30 && wet)) return ['🌦️', 'Showers possible'];
   if (c === 45 || c === 48) return ['🌫️', 'Fog'];
   const cl = h.cloud ?? 100;
-  if (cl <= 20) return night ? ['🌙', 'Clear'] : ['☀️', 'Sunny'];
-  if (cl <= 50) return night ? ['🌙', 'Mostly clear'] : ['🌤️', 'Mostly sunny'];
+  if (cl <= 25) return night ? ['🌙', 'Clear'] : ['☀️', 'Sunny'];
+  if (cl <= MAX_CLOUD) return night ? ['🌙', 'Mostly clear'] : ['🌤️', 'Mostly sunny'];
   if (cl <= 85) return ['⛅', 'Partly cloudy'];
   return ['☁️', 'Cloudy'];
 }
 
 const hourCache = new Map();
-async function fetchHourly(p) {
+async function fetchHourly(p, onWait) {
   const key = `${p.lat.toFixed(3)},${p.lon.toFixed(3)}`;
   const hit = hourCache.get(key);
-  if (hit && Date.now() - hit.ts < CACHE_TTL_MS) return hit;
+  if (hit && Date.now() - hit.ts < CACHE_TTL_MS && hit.day === localDate(hit.offset)) return hit;
   const [[f], ensRes] = await Promise.all([
     fetchMulti(FORECAST_API, [p], {
       hourly: 'weather_code,cloud_cover,temperature_2m,precipitation_probability,is_day',
       forecast_days: String(FORECAST_DAYS),
-    }),
-    fetchMulti(ENSEMBLE_API, [p], { hourly: 'cloud_cover,precipitation', models: 'ecmwf_ifs025', forecast_days: String(ENS_DAYS) })
+    }, onWait),
+    fetchMulti(ENSEMBLE_API, [p], { hourly: 'cloud_cover', models: 'ecmwf_ifs025', forecast_days: String(ENS_DAYS) }, onWait)
       .then(([e]) => e).catch(() => null),
   ]);
   const h = f.hourly, eh = ensRes?.hourly;
   const cloudKeys = eh ? Object.keys(eh).filter(k => k.startsWith('cloud_cover')) : [];
-  const rainKeys = eh ? Object.keys(eh).filter(k => k.startsWith('precipitation')) : [];
   const ensIdx = eh ? new Map(eh.time.map((t, i) => [t, i])) : new Map();
-  const pct = (vals, test) => vals.length ? Math.round(100 * vals.filter(test).length / vals.length) : null;
   const median = vals => vals.length ? [...vals].sort((a, b) => a - b)[vals.length >> 1] : null;
   const hours = h.time.map((t, i) => {
     const j = ensIdx.get(t);
     const clouds = j == null ? [] : cloudKeys.map(k => eh[k][j]).filter(v => v != null);
-    const rains = j == null ? [] : rainKeys.map(k => eh[k][j]).filter(v => v != null);
-    const fromEns = clouds.length > 0;
     return {
       time: t, code: h.weather_code[i], temp: h.temperature_2m[i], isDay: h.is_day[i] === 1,
-      cloud: fromEns ? median(clouds) : h.cloud_cover[i],
-      sunChance: fromEns ? pct(clouds, v => v <= 50) : null,
-      rainChance: rains.length ? pct(rains, v => v >= 0.1) : h.precipitation_probability[i],
+      cloud: clouds.length ? median(clouds) : h.cloud_cover[i],
+      // same cloud cutoff as the daily "Sunny" rule, so a Sunny day never shows low sun chances
+      sunChance: clouds.length ? Math.round(100 * clouds.filter(v => v <= MAX_CLOUD).length / clouds.length) : null,
+      rainChance: h.precipitation_probability[i],
     };
   });
-  const result = { ts: Date.now(), hours, ensemble: !!eh };
+  const offset = f.utc_offset_seconds || 0;
+  const result = { ts: Date.now(), hours, ensemble: !!eh, offset, day: localDate(offset) };
   if (eh) hourCache.set(key, result);   // don't cache a fallback result; retry next time
   return result;
 }
@@ -526,17 +539,21 @@ async function openHours(dayIdx) {
   const { place: p, days } = state.detail || {};
   const day = days?.[dayIdx];
   if (!day) return;
-  $('#hoursTitle').textContent = dayIdx === 0 ? 'Today' : dayIdx === 1 ? 'Tomorrow' :
+  const label = dayLabel(day);
+  $('#hoursTitle').textContent = label === 'Today' || label === 'Tomorrow' ? label :
     dateOf(day.date).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' });
   $('#hoursSub').textContent = p.name;
   $('#hoursNote').textContent = '';
   $('#hourRows').innerHTML = '<li class="muted">Loading…</li>';
   $('#hours').showModal();
   try {
-    const { hours: all, ensemble } = await fetchHourly(p);
-    const now = new Date();
-    const nowKey = `${day.date}T${String(now.getHours()).padStart(2, '0')}`;
-    const hours = all.filter(h => h.time.startsWith(day.date) && (dayIdx > 0 || h.time.slice(0, 13) >= nowKey));
+    const { hours: all, ensemble, offset } = await fetchHourly(p, () => {
+      $('#hoursNote').textContent = '⏳ Weather service is busy – continuing in 1 minute…';
+    });
+    const isToday = day.date === localDate(offset);
+    const nowKey = `${day.date}T${String(localHour(offset)).padStart(2, '0')}`;
+    const hours = all.filter(h => h.time.startsWith(day.date) && (!isToday || h.time.slice(0, 13) >= nowKey));
+    $('#hoursNote').textContent = '';
     $('#hourRows').innerHTML = hours.map(h => {
       const [icon, label] = hourCondition(h);
       const rain = h.rainChance != null ? `<span class="chip rain-chip${h.rainChance < 10 ? ' dim' : ''}">💧 ${h.rainChance}%</span>` : '';
@@ -670,7 +687,9 @@ async function refresh({ force = false } = {}) {
     await loadCities();
     const key = cacheKey();
     const cached = store.get('forecastCache3');
-    if (!force && cached && cached.key === key && Date.now() - cached.ts < CACHE_TTL_MS) {
+    const first = cached?.forecasts?.[0]?.[0];
+    const sameDay = first && first.date === localDate(first.offset);
+    if (!force && cached && cached.key === key && Date.now() - cached.ts < CACHE_TTL_MS && sameDay) {
       state.places = cached.places; state.forecasts = cached.forecasts; state.fetchedAt = cached.ts;
       state.ens = cached.ens || []; state.ensMode = cached.ensMode || 'failed'; state.cacheKey = key;
       setStatus('');

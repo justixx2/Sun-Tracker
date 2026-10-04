@@ -116,7 +116,8 @@ def main():
                 prob = h["precipitation_probability"][i]
                 blend = round((prob + r01) / 2) if prob is not None and r01 is not None else None
                 yy = y.get(t, {}); ww = w.get(t)
-                ys = f"{yy.get('cloud', '-'):>5} {yy.get('mm', '-'):>4} {yy.get('prob', '-'):>4} {str(yy.get('sym', '-'))[:16]:16s}" if yy else f"{'-':>5} {'-':>4} {'-':>4} {'':16s}"
+                nz = lambda v: '-' if v is None else v
+                ys = f"{nz(yy.get('cloud')):>5} {nz(yy.get('mm')):>4} {nz(yy.get('prob')):>4} {str(nz(yy.get('sym')))[:16]:16s}" if yy else f"{'-':>5} {'-':>4} {'-':>4} {'':16s}"
                 ws = f"{ww['cloud']:>5} {ww['rain']:>4} {ww['sun']:>4} {ww['desc'][:14]}" if ww else ""
                 print(f"  {t[11:16]} | {h['cloud_cover'][i]:>5} {h['weather_code'][i]:>4} {h['precipitation'][i]:>4} {str(prob):>4} | "
                       f"{str(ih['cloud_cover'][k] if k is not None else '-'):>5} {str(ih['precipitation'][k] if k is not None else '-'):>4} | "
