@@ -46,9 +46,10 @@ const LAT = +(process.env.LAT || 50.06), LON = +(process.env.LON || 19.94);
     console.log('\nDetail for', await page.textContent('#detailTitle'));
     for (const li of await page.$$('#detailRows li')) console.log('  ' + await text(li));
 
-    await page.click('#detailRows li[data-day="1"]');
-    await page.waitForSelector('#hourRows .hour', { timeout: 60000 });
-    console.log('\nTomorrow hour by hour:');
+    const hourDay = process.env.HOUR_DAY || '1';   // which day to open hour by hour (0 = today)
+    await page.click(`#detailRows li[data-day="${hourDay}"]`);
+    await page.waitForSelector('#hourRows .hour', { timeout: 90000 });
+    console.log(`\nDay ${hourDay} hour by hour: ${await page.textContent('#hoursTitle')} ${await page.textContent('#hoursNote')}`);
     for (const li of await page.$$('#hourRows .hour')) console.log('  ' + await text(li));
     await page.click('#hours [data-close]');
 

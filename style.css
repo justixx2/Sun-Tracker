@@ -202,6 +202,7 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
 .chip { font-size: 12px; font-weight: 600; border-radius: 999px; padding: 2px 7px; white-space: nowrap; }
 .sun-chip { background: var(--maybe); }
 .rain-chip { background: color-mix(in srgb, var(--rain) 35%, transparent); }
+.chip.dim { opacity: .45; }
 .h-temp { font-weight: 700; text-align: right; }
 
 #placeSearch {
