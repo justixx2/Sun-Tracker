@@ -1,0 +1,46 @@
+name: Temporary API probe
+on:
+  push:
+    branches: [claude/sunny-weather-location-finder-keggwf]
+    paths: [.github/workflows/probe.yml]
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - shell: python
+        run: |
+          import json, urllib.request, urllib.error
+          def get(url):
+              try:
+                  with urllib.request.urlopen(url, timeout=90) as r: return json.load(r)
+              except urllib.error.HTTPError as e: return {"error": f"{e.code} {e.read().decode()[:200]}"}
+              except Exception as e: return {"error": str(e)}
+          P = "latitude=55.92&longitude=21.07&timezone=auto"   # Palanga
+          E = "https://ensemble-api.open-meteo.com/v1/ensemble"
+          print("== ensemble models, max range (daily temperature_2m_max) ==")
+          for m in ["ecmwf_ifs025","ecmwf_ifs04","ecmwf_aifs025","gfs05","gfs025","icon_seamless","gem_global","bom_access_global_ensemble","ukmo_global_ensemble_20km","ecmwf_ifs025_ensemble","ecmwf_extended","ecmwf_ec46","meteoswiss_icon_ch2"]:
+              for days in (46, 35, 16):
+                  d = get(f"{E}?{P}&models={m}&daily=temperature_2m_max&forecast_days={days}")
+                  if "error" not in d:
+                      t = d["daily"]["time"]; mem = len([k for k in d["daily"] if k.startswith("temperature_2m_max")])
+                      print(f"  {m:28s} OK forecast_days={days}: {t[0]}..{t[-1]} ({len(t)} days), {mem} members")
+                      break
+              else:
+                  print(f"  {m:28s} {d['error'][:120]}")
+          print("== seasonal API ==")
+          S = "https://seasonal-api.open-meteo.com/v1/seasonal"
+          for m in ["", "&models=cfsv2", "&models=ecmwf_seas5", "&models=ecmwf_seasonal_seamless", "&models=ecmwf_ec46", "&models=ecmwf_seasonal_ensemble_mean_seamless"]:
+              d = get(f"{S}?{P}{m}&daily=temperature_2m_max,temperature_2m_min,precipitation_sum&forecast_days=45")
+              if "error" in d: print(f"  {m or 'default':40s} {d['error'][:150]}"); continue
+              dd = d.get("daily", {}); keys = list(dd)[:6]
+              print(f"  {m or 'default':40s} OK {dd['time'][0]}..{dd['time'][-1]} keys={keys} n={len([k for k in dd if k.startswith('temperature_2m_max')])}")
+          print("== forecast API hourly for a day ==")
+          d = get(f"https://api.open-meteo.com/v1/forecast?{P}&hourly=weather_code,cloud_cover,temperature_2m,precipitation_probability,precipitation,is_day&forecast_days=10")
+          h = d["hourly"]; i = h["time"].index([t for t in h["time"] if t.startswith(h["time"][0][:8]) and "T12" in t][0])
+          print("  keys", list(h)); print("  sample day 6 12:00:", {k: h[k][i+24*5] for k in h})
+          print("  precipitation_probability nulls after day:", next((h['time'][k] for k,v in enumerate(h['precipitation_probability']) if v is None), None))
+          print("== climate normals (archive, 10y) ==")
+          d = get(f"https://archive-api.open-meteo.com/v1/archive?{P}&start_date=2016-10-01&end_date=2016-10-03&daily=temperature_2m_max")
+          print("  archive:", "OK" if "error" not in d else d["error"])
+          d = get(f"https://climate-api.open-meteo.com/v1/climate?{P}&start_date=2026-10-01&end_date=2026-10-03&models=EC_Earth3P_HR&daily=temperature_2m_max")
+          print("  climate:", "OK" if "error" not in d else d["error"])
