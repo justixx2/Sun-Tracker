@@ -188,7 +188,16 @@ async function fetchMulti(api, batch, extra, onWait) {
     ...extra,
   });
   for (let attempt = 0; ; attempt++) {
-    const res = await fetch(`${api}?${params}`);
+    let res;
+    try {
+      res = await fetch(`${api}?${params}`);
+    } catch (e) {
+      // Open-Meteo's "too many requests" replies carry no CORS headers, so the browser only
+      // reports a failed fetch. Treat it like a 429: wait a minute and try once more.
+      if (navigator.onLine === false) throw new Error('You seem to be offline');
+      if (attempt === 0) { onWait?.(); await sleep(61000); continue; }
+      throw new Error('429: the weather service is busy, please try again in a minute');
+    }
     if (res.ok) {
       const json = await res.json();
       return Array.isArray(json) ? json : [json];
@@ -542,7 +551,10 @@ async function fetchHourly(p, onWait) {
     temp: col('temperature_2m', 'best_match'), prob: col('precipitation_probability', 'best_match'),
     isDay: col('is_day', 'best_match'),
   };
-  const iconCloud = col('cloud_cover', 'icon_seamless');
+  // A single model's hourly cloud cover jumps (97% -> 28% -> 99% in consecutive hours), so each
+  // model is smoothed over three hours (weights 1-2-1) before it votes.
+  const smooth = arr => arr ? arr.map((v, i) => v == null ? null : ((arr[i - 1] ?? v) + 2 * v + (arr[i + 1] ?? v)) / 4) : null;
+  const mainCloud = smooth(main.cloud), iconCloud = smooth(col('cloud_cover', 'icon_seamless'));
   const cloudKeys = eh ? Object.keys(eh).filter(k => k.startsWith('cloud_cover')) : [];
   const ensIdx = eh ? new Map(eh.time.map((t, i) => [t, i])) : new Map();
   const offset = f.utc_offset_seconds || 0;
@@ -558,7 +570,7 @@ async function fetchHourly(p, onWait) {
     const leadMs = new Date(t + ':00Z').getTime() - nowLocal;   // both are "local clock" times
     const ensWeight = leadMs < 48 * 3600e3 ? 1 : 2;
     if (clouds.length) parts.push([100 * clouds.filter(c => c <= MAX_CLOUD).length / clouds.length, ensWeight]);
-    if (main.cloud?.[i] != null) parts.push([sunny(main.cloud[i]), 1]);
+    if (mainCloud?.[i] != null) parts.push([sunny(mainCloud[i]), 1]);
     if (iconCloud?.[i] != null) parts.push([sunny(iconCloud[i]), 1]);
     const sunChance = parts.length
       ? Math.round(parts.reduce((a, [v, w]) => a + v * w, 0) / parts.reduce((a, [, w]) => a + w, 0)) : null;
@@ -769,8 +781,9 @@ async function refresh({ force = false } = {}) {
     render();
   } catch (e) {
     console.error(e);
-    const offline = !navigator.onLine ? ' You seem to be offline.' : '';
-    setStatus(`⚠️ ${esc(e.message || 'Something went wrong')}.${offline} <button class="btn ghost" id="retryBtn">Retry</button>`, 'error');
+    const msg = /429/.test(e.message) ? 'The weather service is busy – please try again in a minute'
+      : /fetch/i.test(e.message) ? 'Could not reach the weather service' : (e.message || 'Something went wrong');
+    setStatus(`⚠️ ${esc(msg)}. <button class="btn ghost" id="retryBtn">Retry</button>`, 'error');
     $('#retryBtn')?.addEventListener('click', () => refresh({ force: true }));
   } finally {
     state.loading = false;

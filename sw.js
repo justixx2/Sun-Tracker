@@ -1,5 +1,5 @@
 // Caches the app shell so it opens instantly (and offline). Weather data is cached by the app itself.
-const CACHE = 'sun-tracker-v14';
+const CACHE = 'sun-tracker-v15';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'data/cities.tsv',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png'];
 
