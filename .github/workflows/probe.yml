@@ -1,0 +1,32 @@
+name: Temporary API probe
+on:
+  push:
+    branches: [claude/sunny-weather-location-finder-keggwf]
+    paths: [.github/workflows/probe.yml]
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - shell: python
+        run: |
+          import json, urllib.request, urllib.error
+          def get(url):
+              try:
+                  with urllib.request.urlopen(url, timeout=120) as r: return json.load(r)
+              except urllib.error.HTTPError as e: return {"error": f"{e.code} {e.read().decode()[:200]}"}
+          P = "latitude=54.020&longitude=23.970&timezone=auto"
+          f = get(f"https://api.open-meteo.com/v1/forecast?{P}&forecast_days=10&hourly=weather_code,cloud_cover,precipitation_probability,precipitation,is_day")
+          e = get(f"https://ensemble-api.open-meteo.com/v1/ensemble?{P}&forecast_days=10&models=ecmwf_ifs025&hourly=cloud_cover,precipitation")
+          y = get("https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=54.02&lon=23.97") if False else None
+          h, eh = f["hourly"], e["hourly"]
+          cm = [k for k in eh if k.startswith("cloud_cover")]; pm = [k for k in eh if k.startswith("precipitation")]
+          print("ensemble members", len(cm), len(pm))
+          for day in sorted({t[:10] for t in h["time"]}):
+              print("\n", day)
+              for i, t in enumerate(h["time"]):
+                  if not t.startswith(day) or int(t[11:13]) not in (6,8,9,10,12,14,15,16,18): continue
+                  j = eh["time"].index(t)
+                  cv = [eh[k][j] for k in cm if eh[k][j] is not None]; pv = [eh[k][j] for k in pm if eh[k][j] is not None]
+                  sun = round(100*sum(v<=50 for v in cv)/len(cv)) if cv else None
+                  rain = round(100*sum(v>=0.1 for v in pv)/len(pv)) if pv else None
+                  print(f"  {t[11:16]} main: code {h['weather_code'][i]:2d} cloud {h['cloud_cover'][i]:3d} rainP {h['precipitation_probability'][i]} mm {h['precipitation'][i]} | ens n={len(cv)} sun {sun} rain {rain} medianCloud {sorted(cv)[len(cv)//2] if cv else None}")
