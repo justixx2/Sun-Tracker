@@ -13,6 +13,9 @@ for the next days, so you can see where to travel for sun.
 - Filters: distance, minimum sunny days in a row, how many days ahead, how strict "sunny" is,
   and sort by closest / longest sun / most sunny days / soonest.
 - Map view coloured by length of the sunny spell.
+- Tap a day to see it **hour by hour** (condition, temperature, chance of sun and rain).
+- **45-day forecast** for any place from ECMWF's extended-range ensemble (51 scenarios); beyond two
+  weeks it shows the likely trend rather than pretending to know the exact day.
 
 No account, no API key, no server: weather comes from the free [Open-Meteo](https://open-meteo.com/) API.
 Forecasts are cached for an hour.

@@ -178,7 +178,7 @@ dialog::backdrop { background: rgba(0,0,0,.45); }
 .actions { display: flex; gap: 8px; margin: 12px 0; }
 .actions .btn { flex: 1; }
 .long .lrow {
-  display: grid; grid-template-columns: 100px 28px 1fr auto; align-items: center; gap: 6px;
+  display: grid; grid-template-columns: 112px 28px 1fr auto; align-items: center; gap: 6px;
   padding: 7px 10px; margin-bottom: 3px; border-radius: 10px; background: var(--na);
 }
 .long .lrow.sun { background: var(--sun); color: #1f2328; }

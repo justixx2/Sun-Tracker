@@ -45,6 +45,17 @@ const LAT = +(process.env.LAT || 50.06), LON = +(process.env.LON || 19.94);
     await page.waitForTimeout(3000); // let an on-demand double-check finish
     console.log('\nDetail for', await page.textContent('#detailTitle'));
     for (const li of await page.$$('#detailRows li')) console.log('  ' + text(li));
+
+    await page.click('#detailRows li[data-day="1"]');
+    await page.waitForSelector('#hourRows .hour', { timeout: 60000 });
+    console.log('\nTomorrow hour by hour:');
+    for (const li of await page.$$('#hourRows .hour')) console.log('  ' + text(li));
+    await page.click('#hours [data-close]');
+
+    await page.click('#longBtn');
+    await page.waitForSelector('#longRows .lrow', { timeout: 120000 });
+    console.log('\n45-day outlook:');
+    for (const li of await page.$$('#longRows li')) console.log('  ' + text(li));
   }
   await page.screenshot({ path: 'live-check.png', fullPage: false });
   if (errors.length) throw new Error('Page errors: ' + errors.join('; '));
