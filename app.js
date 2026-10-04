@@ -17,7 +17,7 @@ const CACHE_TTL_MS = 60 * 60 * 1000;
 // Sunny days are double-checked against the 51 ECMWF ensemble scenarios. Every scenario counts
 // against Open-Meteo's free limit (600 calls/minute), so only the best candidates are checked.
 const ENS_DAYS = 10;
-const ENS_MAX_PLACES = 80;
+const ENS_MAX_PLACES = 60;   // keeps a full load inside the 600 calls/minute free limit
 const ENS_BATCH = 20;
 const MAX_CLOUD = 60;        // daytime (9-17) cloud cover % that still counts as sunny
 const SURE = 75;             // % of scenarios that must be sunny for a "Sunny" day
@@ -501,7 +501,7 @@ function openDetail(idx) {
 // is badly wrong at different hours (a single model's hourly cloud flips between clear and
 // overcast; the scenarios are an older run), so no single source is trusted on its own. The label
 // is derived from that same number, so the two can never contradict each other. For the next 24 h
-// the fresher models weigh as much as the scenarios; after that the scenarios weigh half.
+// the first two days the fresher models weigh as much as the scenarios; after that the scenarios weigh half.
 // Rain chance is Open-Meteo's hourly precipitation probability: it tracks Yr within a few points,
 // and it is the same number the daily "Rain" verdict uses, so the two views agree.
 function hourCondition(h) {
@@ -550,11 +550,13 @@ async function fetchHourly(p, onWait) {
   const hours = h.time.map((t, i) => {
     const j = ensIdx.get(t);
     const clouds = j == null ? [] : cloudKeys.map(k => eh[k][j]).filter(v => v != null);
-    const sunny = c => (c <= MAX_CLOUD ? 100 : 0);
+    // A single model's cloud cover is graded, not all-or-nothing (<=40% cloud counts fully sunny,
+    // >=80% not at all, 60% half), otherwise hours flip between Clear and Cloudy on small changes.
+    const sunny = c => Math.max(0, Math.min(100, (80 - c) * 2.5));
     // weighted vote: ensemble share + main model + ICON
     const parts = [];
     const leadMs = new Date(t + ':00Z').getTime() - nowLocal;   // both are "local clock" times
-    const ensWeight = leadMs < 24 * 3600e3 ? 1 : 2;
+    const ensWeight = leadMs < 48 * 3600e3 ? 1 : 2;
     if (clouds.length) parts.push([100 * clouds.filter(c => c <= MAX_CLOUD).length / clouds.length, ensWeight]);
     if (main.cloud?.[i] != null) parts.push([sunny(main.cloud[i]), 1]);
     if (iconCloud?.[i] != null) parts.push([sunny(iconCloud[i]), 1]);

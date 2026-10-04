@@ -27,4 +27,5 @@ jobs:
         env: { LAT: "54.02", LON: "23.97", DETAIL: home, HOUR_DAY: "1" }
         run: |
           set -o pipefail
+          sleep 65   # stay inside the free per-minute limit after the first full load
           node tests/live-check.js | sed -n '/hour by hour/,/45-day/p'
