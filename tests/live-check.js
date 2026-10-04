@@ -26,7 +26,7 @@ const LAT = +(process.env.LAT || 50.06), LON = +(process.env.LON || 19.94);
   const err = await page.$('.status.error');
   if (err) throw new Error('App showed error: ' + await err.innerText());
 
-  const text = el => el.innerText.replace(/\s+/g, ' ').trim();
+  const text = async el => (await el.innerText()).replace(/\s+/g, ' ').trim();
   console.log(`Live API calls: ${apiCalls}, failed: ${apiFailures}`);
   console.log('Location:', await page.textContent('#locationText'));
   console.log(await page.textContent('#summary'));
@@ -44,18 +44,18 @@ const LAT = +(process.env.LAT || 50.06), LON = +(process.env.LON || 19.94);
     await page.waitForSelector('#detailRows li');
     await page.waitForTimeout(3000); // let an on-demand double-check finish
     console.log('\nDetail for', await page.textContent('#detailTitle'));
-    for (const li of await page.$$('#detailRows li')) console.log('  ' + text(li));
+    for (const li of await page.$$('#detailRows li')) console.log('  ' + await text(li));
 
     await page.click('#detailRows li[data-day="1"]');
     await page.waitForSelector('#hourRows .hour', { timeout: 60000 });
     console.log('\nTomorrow hour by hour:');
-    for (const li of await page.$$('#hourRows .hour')) console.log('  ' + text(li));
+    for (const li of await page.$$('#hourRows .hour')) console.log('  ' + await text(li));
     await page.click('#hours [data-close]');
 
     await page.click('#longBtn');
     await page.waitForSelector('#longRows .lrow', { timeout: 120000 });
     console.log('\n45-day outlook:');
-    for (const li of await page.$$('#longRows li')) console.log('  ' + text(li));
+    for (const li of await page.$$('#longRows li')) console.log('  ' + await text(li));
   }
   await page.screenshot({ path: 'live-check.png', fullPage: false });
   if (errors.length) throw new Error('Page errors: ' + errors.join('; '));
