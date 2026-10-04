@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main, claude/sunny-weather-location-finder-keggwf]
-    paths: [tests/verify.py]
+    paths: [tests/verify.py, tests/audit-hourly.py]
 
 jobs:
   verify:
@@ -14,6 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: python3 -u tests/verify.py | tee accuracy.txt
+      - run: python3 -u tests/audit-hourly.py | tee -a accuracy.txt
       - uses: actions/upload-artifact@v4
         with:
           name: accuracy
