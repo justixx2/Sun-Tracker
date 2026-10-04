@@ -100,7 +100,19 @@
     </div>
     <a id="directionsLink" class="btn directions" target="_blank" rel="noopener">🚗 Directions</a>
     <ul id="detailRows" class="rows"></ul>
-    <p class="muted small">Days further ahead (faded) can still change – check again before you go.</p>
+    <p class="muted small">Tap a day to see it hour by hour. Days further ahead (faded) can still change – check again before you go.</p>
+  </dialog>
+
+  <dialog id="hours" class="sheet">
+    <div class="sheet-head">
+      <div>
+        <h2 id="hoursTitle"></h2>
+        <p id="hoursSub" class="muted"></p>
+      </div>
+      <button class="icon-btn close" data-close aria-label="Close">✕</button>
+    </div>
+    <ul id="hourRows" class="hours"></ul>
+    <p class="muted small">☀️ = chance of sunshine (share of 51 forecast scenarios with little cloud) · 💧 = chance of rain.</p>
   </dialog>
 
   <dialog id="locationDialog" class="sheet">

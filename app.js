@@ -440,13 +440,15 @@ function openDetail(idx) {
   $('#directionsLink').href = `https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lon}`;
   const renderRows = () => {
     $('#detailRows').innerHTML = r.days.map((d, i) => `
-      <li class="row ${r.kinds[i]}${i >= 5 ? ' far' : ''}">
+      <li class="row ${r.kinds[i]}${i >= 5 ? ' far' : ''}" data-day="${i}">
         <span class="row-day">${i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : esc(fmtDay(d.date))}</span>
         <span class="row-icon">${ICON[r.kinds[i]]}</span>
         <span class="row-label">${LABEL[r.kinds[i]]}</span>
         <span class="row-temp">${d.tmax != null ? Math.round(d.tmax) + '°' : ''}<small>${d.tmin != null ? ' ' + Math.round(d.tmin) + '°' : ''}</small></span>
+        <span class="row-more">›</span>
       </li>`).join('');
   };
+  state.detail = { place: p, get days() { return r.days; } };
   renderRows();
   $('#detail').showModal();
   if (state.ens[pi] || state.ensMode !== 'done') return;
@@ -460,6 +462,84 @@ function openDetail(idx) {
       render();
     })
     .catch(() => {});
+}
+
+// ---------- Hour-by-hour sheet ----------
+// WMO weather codes -> precipitation type
+function hourCondition(h) {
+  const c = h.code, night = !h.isDay;
+  if (c >= 95) return ['⛈️', 'Thunderstorm'];
+  if ((c >= 71 && c <= 77) || c === 85 || c === 86) return ['🌨️', 'Snow'];
+  if (c >= 80 && c <= 82) return ['🌦️', 'Showers'];
+  if (c >= 61 && c <= 67) return ['🌧️', 'Rain'];
+  if (c >= 51 && c <= 57) return ['🌦️', 'Drizzle'];
+  if (c === 45 || c === 48) return ['🌫️', 'Fog'];
+  const cl = h.cloud ?? 100;
+  if (cl <= 20) return night ? ['🌙', 'Clear'] : ['☀️', 'Sunny'];
+  if (cl <= 50) return night ? ['🌙', 'Mostly clear'] : ['🌤️', 'Mostly sunny'];
+  if (cl <= 85) return ['⛅', 'Partly cloudy'];
+  return ['☁️', 'Cloudy'];
+}
+
+const hourCache = new Map();
+async function fetchHourly(p) {
+  const key = `${p.lat.toFixed(3)},${p.lon.toFixed(3)}`;
+  const hit = hourCache.get(key);
+  if (hit && Date.now() - hit.ts < CACHE_TTL_MS) return hit.data;
+  const [[f], [e]] = await Promise.all([
+    fetchMulti(FORECAST_API, [p], {
+      hourly: 'weather_code,cloud_cover,temperature_2m,precipitation_probability,precipitation,is_day',
+      forecast_days: String(FORECAST_DAYS),
+    }),
+    fetchMulti(ENSEMBLE_API, [p], { hourly: 'cloud_cover', models: 'ecmwf_ifs025', forecast_days: String(ENS_DAYS) })
+      .catch(() => [null]),
+  ]);
+  const h = f.hourly, eh = e?.hourly;
+  const members = eh ? Object.keys(eh).filter(k => k.startsWith('cloud_cover')) : [];
+  const ensIdx = eh ? new Map(eh.time.map((t, i) => [t, i])) : new Map();
+  const data = h.time.map((t, i) => {
+    const j = ensIdx.get(t);
+    const vals = j == null ? [] : members.map(k => eh[k][j]).filter(v => v != null);
+    return {
+      time: t, code: h.weather_code[i], cloud: h.cloud_cover[i], temp: h.temperature_2m[i],
+      rainProb: h.precipitation_probability[i], rain: h.precipitation[i], isDay: h.is_day[i] === 1,
+      // share of forecast scenarios with little cloud (sun likely) at this hour
+      sunChance: vals.length ? Math.round(100 * vals.filter(v => v <= 50).length / vals.length) : null,
+    };
+  });
+  hourCache.set(key, { ts: Date.now(), data });
+  return data;
+}
+
+async function openHours(dayIdx) {
+  const { place: p, days } = state.detail || {};
+  const day = days?.[dayIdx];
+  if (!day) return;
+  $('#hoursTitle').textContent = dayIdx === 0 ? 'Today' : dayIdx === 1 ? 'Tomorrow' :
+    dateOf(day.date).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long' });
+  $('#hoursSub').textContent = p.name;
+  $('#hourRows').innerHTML = '<li class="muted">Loading…</li>';
+  $('#hours').showModal();
+  try {
+    const all = await fetchHourly(p);
+    const now = new Date();
+    const nowKey = `${day.date}T${String(now.getHours()).padStart(2, '0')}`;
+    const hours = all.filter(h => h.time.startsWith(day.date) && (dayIdx > 0 || h.time.slice(0, 13) >= nowKey));
+    $('#hourRows').innerHTML = hours.map(h => {
+      const [icon, label] = hourCondition(h);
+      const rain = h.rainProb != null && h.rainProb >= 10 ? `<span class="chip rain-chip">💧 ${h.rainProb}%</span>` : '';
+      const sun = h.isDay && h.sunChance != null ? `<span class="chip sun-chip">☀️ ${h.sunChance}%</span>` : '';
+      return `<li class="hour${h.isDay ? '' : ' night'}">
+        <span class="h-time">${h.time.slice(11, 16)}</span>
+        <span class="h-icon">${icon}</span>
+        <span class="h-label">${label}</span>
+        <span class="h-chips">${sun}${rain}</span>
+        <span class="h-temp">${h.temp != null ? Math.round(h.temp) + '°' : ''}</span>
+      </li>`;
+    }).join('') || '<li class="muted">No hourly data for this day.</li>';
+  } catch (e) {
+    $('#hourRows').innerHTML = `<li class="muted">Couldn't load hourly forecast (${esc(e.message)}).</li>`;
+  }
 }
 
 // ---------- Location ----------
@@ -616,6 +696,8 @@ function bindUi() {
     if (card) return openDetail(+card.dataset.idx);
     const open = e.target.closest('[data-open]');
     if (open) return openDetail(+open.dataset.open);
+    const dayRow = e.target.closest('#detailRows .row');
+    if (dayRow) return openHours(+dayRow.dataset.day);
     const close = e.target.closest('[data-close]');
     if (close) return close.closest('dialog').close();
   });
