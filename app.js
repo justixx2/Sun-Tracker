@@ -480,11 +480,14 @@ function openDetail(idx) {
 }
 
 // ---------- Hour-by-hour sheet ----------
-// Label and sun chance come from the 51 ECMWF scenarios' cloud cover (a single model's hourly
-// cloud jumps around: clear at 09:00, overcast at 10:00). Rain chance is Open-Meteo's hourly
-// precipitation probability: it tracks Yr closely, it is updated more often than the ECMWF
-// scenarios, and it is the same number the daily "Rain" verdict uses, so the two views agree.
-// The main model adds temperature and the type of precipitation (thunder, snow).
+// Sun chance per hour blends three independent forecasts: the 51 ECMWF scenarios (share with the
+// sun mostly out), the main Open-Meteo model and DWD ICON. Comparing them with Yr showed each one
+// is badly wrong at different hours (a single model's hourly cloud flips between clear and
+// overcast; the scenarios are an older run), so no single source is trusted on its own. The label
+// is derived from that same number, so the two can never contradict each other. For the next 24 h
+// the fresher models weigh as much as the scenarios; after that the scenarios weigh half.
+// Rain chance is Open-Meteo's hourly precipitation probability: it tracks Yr within a few points,
+// and it is the same number the daily "Rain" verdict uses, so the two views agree.
 function hourCondition(h) {
   const night = !h.isDay, c = h.code ?? 0, wet = c >= 51, prob = h.rainChance ?? 0;
   if (prob >= 50 && wet) {
@@ -494,10 +497,10 @@ function hourCondition(h) {
   }
   if (prob >= 50 || (prob >= 30 && wet)) return ['🌦️', 'Showers possible'];
   if (c === 45 || c === 48) return ['🌫️', 'Fog'];
-  const cl = h.cloud ?? 100;
-  if (cl <= 25) return night ? ['🌙', 'Clear'] : ['☀️', 'Sunny'];
-  if (cl <= MAX_CLOUD) return night ? ['🌙', 'Mostly clear'] : ['🌤️', 'Mostly sunny'];
-  if (cl <= 85) return ['⛅', 'Partly cloudy'];
+  const sun = h.sunChance ?? (h.cloud != null ? (h.cloud <= MAX_CLOUD ? 100 : 0) : 0);
+  if (sun >= 75) return night ? ['🌙', 'Clear'] : ['☀️', 'Sunny'];
+  if (sun >= 50) return night ? ['🌙', 'Mostly clear'] : ['🌤️', 'Mostly sunny'];
+  if (sun >= 25) return ['⛅', 'Partly cloudy'];
   return ['☁️', 'Cloudy'];
 }
 
@@ -509,27 +512,43 @@ async function fetchHourly(p, onWait) {
   const [[f], ensRes] = await Promise.all([
     fetchMulti(FORECAST_API, [p], {
       hourly: 'weather_code,cloud_cover,temperature_2m,precipitation_probability,is_day',
+      models: 'best_match,icon_seamless',
       forecast_days: String(FORECAST_DAYS),
     }, onWait),
     fetchMulti(ENSEMBLE_API, [p], { hourly: 'cloud_cover', models: 'ecmwf_ifs025', forecast_days: String(ENS_DAYS) }, onWait)
       .then(([e]) => e).catch(() => null),
   ]);
   const h = f.hourly, eh = ensRes?.hourly;
+  // With several models requested, Open-Meteo suffixes each variable with the model name.
+  const col = (name, model) => h[`${name}_${model}`] || (model === 'best_match' ? h[name] : null);
+  const main = {
+    code: col('weather_code', 'best_match'), cloud: col('cloud_cover', 'best_match'),
+    temp: col('temperature_2m', 'best_match'), prob: col('precipitation_probability', 'best_match'),
+    isDay: col('is_day', 'best_match'),
+  };
+  const iconCloud = col('cloud_cover', 'icon_seamless');
   const cloudKeys = eh ? Object.keys(eh).filter(k => k.startsWith('cloud_cover')) : [];
   const ensIdx = eh ? new Map(eh.time.map((t, i) => [t, i])) : new Map();
-  const median = vals => vals.length ? [...vals].sort((a, b) => a - b)[vals.length >> 1] : null;
+  const offset = f.utc_offset_seconds || 0;
+  const nowLocal = localNow(offset).getTime();
   const hours = h.time.map((t, i) => {
     const j = ensIdx.get(t);
     const clouds = j == null ? [] : cloudKeys.map(k => eh[k][j]).filter(v => v != null);
+    const sunny = c => (c <= MAX_CLOUD ? 100 : 0);
+    // weighted vote: ensemble share + main model + ICON
+    const parts = [];
+    const leadMs = new Date(t + ':00Z').getTime() - nowLocal;   // both are "local clock" times
+    const ensWeight = leadMs < 24 * 3600e3 ? 1 : 2;
+    if (clouds.length) parts.push([100 * clouds.filter(c => c <= MAX_CLOUD).length / clouds.length, ensWeight]);
+    if (main.cloud?.[i] != null) parts.push([sunny(main.cloud[i]), 1]);
+    if (iconCloud?.[i] != null) parts.push([sunny(iconCloud[i]), 1]);
+    const sunChance = parts.length
+      ? Math.round(parts.reduce((a, [v, w]) => a + v * w, 0) / parts.reduce((a, [, w]) => a + w, 0)) : null;
     return {
-      time: t, code: h.weather_code[i], temp: h.temperature_2m[i], isDay: h.is_day[i] === 1,
-      cloud: clouds.length ? median(clouds) : h.cloud_cover[i],
-      // same cloud cutoff as the daily "Sunny" rule, so a Sunny day never shows low sun chances
-      sunChance: clouds.length ? Math.round(100 * clouds.filter(v => v <= MAX_CLOUD).length / clouds.length) : null,
-      rainChance: h.precipitation_probability[i],
+      time: t, code: main.code?.[i], temp: main.temp?.[i], isDay: main.isDay?.[i] === 1,
+      cloud: main.cloud?.[i], sunChance, rainChance: main.prob?.[i],
     };
   });
-  const offset = f.utc_offset_seconds || 0;
   const result = { ts: Date.now(), hours, ensemble: !!eh, offset, day: localDate(offset) };
   if (eh) hourCache.set(key, result);   // don't cache a fallback result; retry next time
   return result;
@@ -566,15 +585,17 @@ async function openHours(dayIdx) {
         <span class="h-temp">${h.temp != null ? Math.round(h.temp) + '°' : ''}</span>
       </li>`;
     }).join('') || '<li class="muted">No hourly data for this day.</li>';
-    if (!ensemble) $('#hoursNote').textContent = '⚠️ The detailed forecast is busy right now – showing a simpler forecast without sun chances. Try again in a minute.';
+    if (!ensemble) $('#hoursNote').textContent = '⚠️ The 51-scenario forecast is busy right now – sun chances are from two models only. Try again in a minute.';
   } catch (e) {
-    $('#hourRows').innerHTML = `<li class="muted">Couldn't load hourly forecast (${esc(e.message)}).</li>`;
+    $('#hourRows').innerHTML = /429/.test(e.message)
+      ? '<li class="muted">The weather service is busy right now. Please try again in a minute.</li>'
+      : `<li class="muted">Couldn't load hourly forecast (${esc(e.message)}).</li>`;
   }
 }
 
 // ---------- 45-day outlook ----------
 const longCache = new Map();
-async function fetchLongRange(p) {
+async function fetchLongRange(p, onWait) {
   const key = `${p.lat.toFixed(2)},${p.lon.toFixed(2)}`;
   const hit = longCache.get(key);
   if (hit && Date.now() - hit.ts < 6 * CACHE_TTL_MS) return hit.data;
@@ -584,9 +605,12 @@ async function fetchLongRange(p) {
     'temperature_2m_max,temperature_2m_min,precipitation_sum',
   ]) {
     try {
-      const [j] = await fetchMulti(SEASONAL_API, [p], { models: 'ecmwf_ec46', daily: vars, forecast_days: String(LONG_DAYS) });
+      const [j] = await fetchMulti(SEASONAL_API, [p], { models: 'ecmwf_ec46', daily: vars, forecast_days: String(LONG_DAYS) }, onWait);
       if (j?.daily) { daily = j.daily; break; }
-    } catch (e) { lastErr = e; }
+    } catch (e) {
+      lastErr = e;
+      if (/429/.test(e.message)) break;   // service busy: don't queue another minute-long wait
+    }
   }
   if (!daily) throw lastErr || new Error('no data');
   const membersOf = (v, i) => Object.keys(daily).filter(k => k === v || k.startsWith(v + '_member'))
@@ -625,7 +649,9 @@ async function openLongRange() {
   const short = iso => dateOf(iso).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
   const head = t => `<li class="long-head">${t}</li>`;
   try {
-    const long = await fetchLongRange(p);
+    const long = await fetchLongRange(p, () => {
+      $('#longRows').innerHTML = '<li class="muted">⏳ Weather service is busy – continuing in 1 minute…</li>';
+    });
     const near = new Map((days || []).map((d, i) => [d.date, i]));
     let html = head('Next 10 days');
     long.forEach((d, i) => {
@@ -643,7 +669,9 @@ async function openLongRange() {
     });
     $('#longRows').innerHTML = html;
   } catch (e) {
-    $('#longRows').innerHTML = `<li class="muted">Couldn't load the 45-day outlook (${esc(e.message)}).</li>`;
+    $('#longRows').innerHTML = /429/.test(e.message)
+      ? '<li class="muted">The weather service is busy right now. Please try again in a minute.</li>'
+      : `<li class="muted">Couldn't load the 45-day outlook (${esc(e.message)}).</li>`;
   }
 }
 

@@ -77,7 +77,7 @@ def wttr(lat, lon):
 def main():
     diffs = {"main_prob": [], "ens_r01": [], "ens_r003": [], "blend": []}
     diffs_w = {"main_prob": [], "ens_r01": [], "ens_r003": [], "blend": []}
-    cloud_diffs = {"main": [], "icon": [], "ens_median": []}
+    cloud_diffs = {"main": [], "icon": [], "ens_median": [], "avg(main,ens)": [], "avg(main,icon,ens)": []}
     for name, lat, lon in CITIES:
         m, ic, e = openmeteo(lat, lon)
         errs = [x["error"] for x in (m, ic, e) if "error" in x]
@@ -125,7 +125,10 @@ def main():
                 if yy.get("prob") is not None and 6 <= hh <= 21:
                     for key, val in (("main_prob", prob), ("ens_r01", r01), ("ens_r003", r003), ("blend", blend)):
                         if val is not None: diffs[key].append(abs(val - yy["prob"]))
-                    for key, val in (("main", h["cloud_cover"][i]), ("icon", ih["cloud_cover"][k] if k is not None else None), ("ens_median", ens_cloud)):
+                    mc, icc = h["cloud_cover"][i], (ih["cloud_cover"][k] if k is not None else None)
+                    a2 = (mc + ens_cloud) / 2 if mc is not None and ens_cloud is not None else None
+                    a3 = (mc + icc + ens_cloud) / 3 if None not in (mc, icc, ens_cloud) else None
+                    for key, val in (("main", mc), ("icon", icc), ("ens_median", ens_cloud), ("avg(main,ens)", a2), ("avg(main,icon,ens)", a3)):
                         if val is not None and yy.get("cloud") is not None: cloud_diffs[key].append(abs(val - yy["cloud"]))
                 if ww and 6 <= hh <= 21:
                     for key, val in (("main_prob", prob), ("ens_r01", r01), ("ens_r003", r003), ("blend", blend)):
@@ -135,7 +138,7 @@ def main():
     print("=== Average difference from wttr.in chance of rain ===")
     for k, v in diffs_w.items(): print(f"  {k:10s} {round(st.mean(v)) if v else '-'} points  (n={len(v)})")
     print("=== Average cloud-cover difference from Yr ===")
-    for k, v in cloud_diffs.items(): print(f"  {k:10s} {round(st.mean(v)) if v else '-'} points  (n={len(v)})")
+    for k, v in cloud_diffs.items(): print(f"  {k:20s} {round(st.mean(v)) if v else '-'} points  (n={len(v)})")
 
 if __name__ == "__main__":
     main()

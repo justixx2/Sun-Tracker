@@ -43,11 +43,14 @@ Each day shows one simple verdict: ☀️ Sunny, 🌤️ Maybe sunny, ☁️ Clo
 Cloud cover is used rather than "sunshine hours", because some models report hours of sunshine
 under 100% cloud.
 
-**Hour by hour** (tap a day): the condition label and ☀️ sun chance come from the 51 ECMWF
-scenarios' cloud cover (a single model's hourly cloud jumps around too much); 💧 rain chance is
-Open-Meteo's hourly precipitation probability, the same number the daily "Rain" verdict uses, so the
-two views never contradict each other. The ECMWF scenarios' hourly rain is not used: it is a 3-hour
-total spread over hours and comes from an older run.
+**Hour by hour** (tap a day): ☀️ sun chance is a weighted vote of three independent forecasts –
+the share of the 51 ECMWF scenarios with the sun mostly out (≤ 60% cloud), the main Open-Meteo model
+and DWD ICON – and the label (Sunny / Mostly sunny / Partly cloudy / Cloudy) is derived from that same
+number. No single source is trusted alone: compared with Yr, each one is badly wrong at different
+hours. 💧 rain chance is Open-Meteo's hourly precipitation probability, which tracks Yr within a few
+points and is the same number the daily "Rain" verdict uses, so the two views never contradict each
+other. The ECMWF scenarios' hourly rain is not used: it is a 3-hour total spread over hours and comes
+from an older run.
 
 **Checks:** `tests/verify.py` compares daily verdicts with independent forecasters (MET Norway / Yr,
 wttr.in) and backtests them against satellite-measured sunshine; `tests/audit-hourly.py` compares
