@@ -57,7 +57,7 @@ wttr.in) and backtests them against satellite-measured sunshine; `tests/audit-ho
 every hourly number with Yr, wttr.in and a second model. Both run from the Actions tab.
 
 Each ensemble scenario counts against Open-Meteo's free limit (600 calls/minute, 10,000/day), so the
-double-check runs for your location plus the ~80 most promising towns. Towns that weren't checked
+double-check runs for your location plus the ~60 most promising towns. Towns that weren't checked
 can only be "maybe"; tapping one checks it on demand. If the per-minute limit is hit, the app waits a minute and continues.
 
 ## Run locally
