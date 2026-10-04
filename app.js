@@ -514,7 +514,7 @@ function hourCondition(h) {
   if (prob >= 50 || (prob >= 30 && wet)) return ['🌦️', 'Showers possible'];
   if (c === 45 || c === 48) return ['🌫️', 'Fog'];
   const sun = h.sunChance ?? (h.cloud != null ? (h.cloud <= MAX_CLOUD ? 100 : 0) : 0);
-  if (sun >= 75) return night ? ['🌙', 'Clear'] : ['☀️', 'Sunny'];
+  if (sun >= 80) return night ? ['🌙', 'Clear'] : ['☀️', 'Sunny'];
   if (sun >= 50) return night ? ['🌙', 'Mostly clear'] : ['🌤️', 'Mostly sunny'];
   if (sun >= 25) return ['⛅', 'Partly cloudy'];
   return ['☁️', 'Cloudy'];
@@ -550,9 +550,9 @@ async function fetchHourly(p, onWait) {
   const hours = h.time.map((t, i) => {
     const j = ensIdx.get(t);
     const clouds = j == null ? [] : cloudKeys.map(k => eh[k][j]).filter(v => v != null);
-    // A single model's cloud cover is graded, not all-or-nothing (<=40% cloud counts fully sunny,
-    // >=80% not at all, 60% half), otherwise hours flip between Clear and Cloudy on small changes.
-    const sunny = c => Math.max(0, Math.min(100, (80 - c) * 2.5));
+    // A single model's cloud cover is graded, not all-or-nothing (<=30% cloud counts fully sunny,
+    // >=70% not at all, 50% half), otherwise hours flip between Clear and Cloudy on small changes.
+    const sunny = c => Math.max(0, Math.min(100, (70 - c) * 2.5));
     // weighted vote: ensemble share + main model + ICON
     const parts = [];
     const leadMs = new Date(t + ':00Z').getTime() - nowLocal;   // both are "local clock" times
