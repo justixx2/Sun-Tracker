@@ -134,13 +134,17 @@ function selectPlaces(origin, radiusKm) {
 // 10 h of "sun" under 100% cloud), so sunny days are judged mainly by daytime cloud cover.
 const DAY_HOURS = [9, 16];   // local hours averaged for "daytime" cloud cover
 
-// Average of hourly values per date over DAY_HOURS: {date: mean}
-function daytimeMeans(times, values) {
+// Average of hourly values per date over DAY_HOURS: {date: mean}.
+// For today only the hours still to come count (a sunny morning must not make an overcast
+// afternoon "Sunny"); if fewer than 3 daytime hours remain, the whole day is used.
+function daytimeMeans(times, values, nowHour = 0) {
+  const today = times[0]?.slice(0, 10);
+  const todayStart = DAY_HOURS[1] - Math.max(DAY_HOURS[0], nowHour) + 1 >= 3 ? Math.max(DAY_HOURS[0], nowHour) : DAY_HOURS[0];
   const acc = {};
   times.forEach((t, k) => {
-    const hour = +t.slice(11, 13), v = values[k];
-    if (hour < DAY_HOURS[0] || hour > DAY_HOURS[1] || v == null) return;
-    const a = acc[t.slice(0, 10)] || (acc[t.slice(0, 10)] = [0, 0]);
+    const date = t.slice(0, 10), hour = +t.slice(11, 13), v = values[k];
+    if (hour < (date === today ? todayStart : DAY_HOURS[0]) || hour > DAY_HOURS[1] || v == null) return;
+    const a = acc[date] || (acc[date] = [0, 0]);
     a[0] += v; a[1]++;
   });
   const out = {};
@@ -149,7 +153,18 @@ function daytimeMeans(times, values) {
 }
 
 function normalizeDaily(d, h, offset) {
-  const cloud = h?.cloud_cover ? daytimeMeans(h.time, h.cloud_cover) : {};
+  const nowHour = localHour(offset);
+  const cloud = h?.cloud_cover ? daytimeMeans(h.time, h.cloud_cover, nowHour) : {};
+  // Today's rain: only what is still to come, not this morning's shower.
+  const today = h?.time?.[0]?.slice(0, 10);
+  let rainLeft = null, probLeft = null;
+  if (h?.precipitation && h?.precipitation_probability) {
+    h.time.forEach((t, k) => {
+      if (!t.startsWith(today) || +t.slice(11, 13) < nowHour) return;
+      if (h.precipitation[k] != null) rainLeft = (rainLeft || 0) + h.precipitation[k];
+      if (h.precipitation_probability[k] != null) probLeft = Math.max(probLeft || 0, h.precipitation_probability[k]);
+    });
+  }
   return d.time.map((date, i) => ({
     cloud: cloud[date],
     date, offset,
@@ -158,8 +173,8 @@ function normalizeDaily(d, h, offset) {
     tmin: d.temperature_2m_min?.[i],
     sun: d.sunshine_duration?.[i],
     daylight: d.daylight_duration?.[i],
-    rainSum: d.precipitation_sum?.[i],
-    rainProb: d.precipitation_probability_max?.[i],
+    rainSum: date === today && rainLeft != null ? Math.round(rainLeft * 10) / 10 : d.precipitation_sum?.[i],
+    rainProb: date === today && probLeft != null ? probLeft : d.precipitation_probability_max?.[i],
   }));
 }
 
@@ -191,13 +206,14 @@ async function fetchMulti(api, batch, extra, onWait) {
 
 async function fetchBatch(batch, onWait) {
   const arr = await fetchMulti(FORECAST_API, batch,
-    { daily: DAILY_VARS.join(','), hourly: 'cloud_cover', forecast_days: String(FORECAST_DAYS) }, onWait);
+    { daily: DAILY_VARS.join(','), hourly: 'cloud_cover,precipitation,precipitation_probability', forecast_days: String(FORECAST_DAYS) }, onWait);
   return arr.map(item => item && item.daily ? normalizeDaily(item.daily, item.hourly, item.utc_offset_seconds) : null);
 }
 
 // members[day] = daytime cloud cover (%) of each ensemble member
-function parseEnsemble(h) {
-  const per = Object.keys(h).filter(k => k.startsWith('cloud_cover')).map(k => daytimeMeans(h.time, h[k]));
+function parseEnsemble(h, offset) {
+  const nowHour = localHour(offset);
+  const per = Object.keys(h).filter(k => k.startsWith('cloud_cover')).map(k => daytimeMeans(h.time, h[k], nowHour));
   const dates = [...new Set(h.time.map(t => t.slice(0, 10)))];
   return { dates, members: dates.map(d => per.map(m => m[d]).filter(v => v != null)) };
 }
@@ -205,7 +221,7 @@ function parseEnsemble(h) {
 async function fetchEnsembleBatch(batch, onWait) {
   const arr = await fetchMulti(ENSEMBLE_API, batch,
     { hourly: 'cloud_cover', models: 'ecmwf_ifs025', forecast_days: String(ENS_DAYS) }, onWait);
-  return arr.map(item => item && item.hourly ? parseEnsemble(item.hourly) : null);
+  return arr.map(item => item && item.hourly ? parseEnsemble(item.hourly, item.utc_offset_seconds) : null);
 }
 
 // Pick which towns get the (expensive) sun-chance check: your location, the nearest towns
