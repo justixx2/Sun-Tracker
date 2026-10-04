@@ -3,6 +3,8 @@
 // ---------- Config ----------
 const FORECAST_API = 'https://api.open-meteo.com/v1/forecast';
 const ENSEMBLE_API = 'https://ensemble-api.open-meteo.com/v1/ensemble';
+const SEASONAL_API = 'https://seasonal-api.open-meteo.com/v1/seasonal';
+const LONG_DAYS = 45;        // ECMWF extended-range (EC46) ensemble, 51 scenarios
 const DAILY_VARS = [
   'weather_code', 'temperature_2m_max', 'temperature_2m_min', 'sunshine_duration',
   'daylight_duration', 'precipitation_sum', 'precipitation_probability_max',
@@ -448,7 +450,7 @@ function openDetail(idx) {
         <span class="row-more">›</span>
       </li>`).join('');
   };
-  state.detail = { place: p, get days() { return r.days; } };
+  state.detail = { place: p, get days() { return r.days; }, get kinds() { return r.kinds; } };
   renderRows();
   $('#detail').showModal();
   if (state.ens[pi] || state.ensMode !== 'done') return;
@@ -539,6 +541,81 @@ async function openHours(dayIdx) {
     }).join('') || '<li class="muted">No hourly data for this day.</li>';
   } catch (e) {
     $('#hourRows').innerHTML = `<li class="muted">Couldn't load hourly forecast (${esc(e.message)}).</li>`;
+  }
+}
+
+// ---------- 45-day outlook ----------
+const longCache = new Map();
+async function fetchLongRange(p) {
+  const key = `${p.lat.toFixed(2)},${p.lon.toFixed(2)}`;
+  const hit = longCache.get(key);
+  if (hit && Date.now() - hit.ts < 6 * CACHE_TTL_MS) return hit.data;
+  let daily = null, lastErr;
+  for (const vars of [
+    'temperature_2m_max,temperature_2m_min,precipitation_sum,cloud_cover_mean',
+    'temperature_2m_max,temperature_2m_min,precipitation_sum',
+  ]) {
+    try {
+      const [j] = await fetchMulti(SEASONAL_API, [p], { models: 'ecmwf_ec46', daily: vars, forecast_days: String(LONG_DAYS) });
+      if (j?.daily) { daily = j.daily; break; }
+    } catch (e) { lastErr = e; }
+  }
+  if (!daily) throw lastErr || new Error('no data');
+  const membersOf = (v, i) => Object.keys(daily).filter(k => k === v || k.startsWith(v + '_member'))
+    .map(k => daily[k][i]).filter(x => x != null);
+  const avg = a => a.length ? a.reduce((x, y) => x + y, 0) / a.length : null;
+  const share = (a, f) => a.length ? Math.round(100 * a.filter(f).length / a.length) : null;
+  const data = daily.time.map((date, i) => {
+    const rain = membersOf('precipitation_sum', i), cloud = membersOf('cloud_cover_mean', i);
+    return {
+      date, tmax: avg(membersOf('temperature_2m_max', i)), tmin: avg(membersOf('temperature_2m_min', i)),
+      rainChance: share(rain, v => v >= 1), sunChance: share(cloud, v => v <= 50),
+    };
+  });
+  longCache.set(key, { ts: Date.now(), data });
+  return data;
+}
+
+// Plain-words verdict from the 51 scenarios. Far ahead the scenarios spread out, so most days
+// honestly come out as "mixed" rather than pretending to know.
+function longVerdict(d) {
+  const rain = d.rainChance ?? 0, sun = d.sunChance;
+  if (rain >= 60) return ['rain', '🌧️', 'Rain likely'];
+  if (sun != null && sun >= 60 && rain < 35) return ['sun', '☀️', 'Mostly sunny'];
+  if (rain >= 40) return ['showers', '🌦️', 'Showers possible'];
+  if (sun != null && sun < 25) return ['cloud', '☁️', 'Mostly cloudy'];
+  return ['mixed', '⛅', 'Mixed'];
+}
+
+async function openLongRange() {
+  const { place: p, days, kinds } = state.detail || {};
+  if (!p) return;
+  $('#longTitle').textContent = `${p.name} · ${LONG_DAYS} days`;
+  $('#longRows').innerHTML = '<li class="muted">Loading the 45-day outlook…</li>';
+  $('#long').showModal();
+  const temps = d => `<span class="row-temp">${d.tmax != null ? Math.round(d.tmax) + '°' : ''}<small>${d.tmin != null ? ' ' + Math.round(d.tmin) + '°' : ''}</small></span>`;
+  const short = iso => dateOf(iso).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+  const head = t => `<li class="long-head">${t}</li>`;
+  try {
+    const long = await fetchLongRange(p);
+    const near = new Map((days || []).map((d, i) => [d.date, i]));
+    let html = head('Next 10 days');
+    long.forEach((d, i) => {
+      if (i === (days?.length || 10)) html += head('Days 11–15 · fairly reliable');
+      if (i === 15) html += head('Weeks 3–6 · likely trend, not exact days');
+      const j = near.get(d.date);
+      if (j != null && kinds) {   // first 10 days: same verdict as everywhere else in the app
+        html += `<li class="lrow ${kinds[j]}"><span class="row-day">${esc(short(d.date))}</span>` +
+          `<span class="row-icon">${ICON[kinds[j]]}</span><span class="row-label">${LABEL[kinds[j]]}</span>${temps(days[j])}</li>`;
+      } else {
+        const [cls, icon, label] = longVerdict(d);
+        html += `<li class="lrow ${cls}${i >= 15 ? ' far' : ''}"><span class="row-day">${esc(short(d.date))}</span>` +
+          `<span class="row-icon">${icon}</span><span class="row-label">${label}</span>${temps(d)}</li>`;
+      }
+    });
+    $('#longRows').innerHTML = html;
+  } catch (e) {
+    $('#longRows').innerHTML = `<li class="muted">Couldn't load the 45-day outlook (${esc(e.message)}).</li>`;
   }
 }
 
@@ -696,6 +773,7 @@ function bindUi() {
     if (card) return openDetail(+card.dataset.idx);
     const open = e.target.closest('[data-open]');
     if (open) return openDetail(+open.dataset.open);
+    if (e.target.closest('#longBtn')) return openLongRange();
     const dayRow = e.target.closest('#detailRows .row');
     if (dayRow) return openHours(+dayRow.dataset.day);
     const close = e.target.closest('[data-close]');

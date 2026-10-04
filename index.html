@@ -98,7 +98,10 @@
       </div>
       <button class="icon-btn close" data-close aria-label="Close">✕</button>
     </div>
-    <a id="directionsLink" class="btn directions" target="_blank" rel="noopener">🚗 Directions</a>
+    <div class="actions">
+      <a id="directionsLink" class="btn" target="_blank" rel="noopener">🚗 Directions</a>
+      <button id="longBtn" class="btn ghost">📅 45-day forecast</button>
+    </div>
     <ul id="detailRows" class="rows"></ul>
     <p class="muted small">Tap a day to see it hour by hour. Days further ahead (faded) can still change – check again before you go.</p>
   </dialog>
@@ -113,6 +116,19 @@
     </div>
     <ul id="hourRows" class="hours"></ul>
     <p class="muted small">☀️ = chance of sunshine (share of 51 forecast scenarios with little cloud) · 💧 = chance of rain.</p>
+  </dialog>
+
+  <dialog id="long" class="sheet">
+    <div class="sheet-head">
+      <div>
+        <h2 id="longTitle"></h2>
+        <p class="muted">ECMWF extended forecast, 51 scenarios</p>
+      </div>
+      <button class="icon-btn close" data-close aria-label="Close">✕</button>
+    </div>
+    <ul id="longRows" class="rows long"></ul>
+    <p class="muted small">After about two weeks no forecast can say exactly which day will be sunny – this
+      shows what the 51 scenarios agree on. “Mixed” means they don't agree. Temperatures are the scenarios' average.</p>
   </dialog>
 
   <dialog id="locationDialog" class="sheet">
