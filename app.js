@@ -478,31 +478,67 @@ function openDetail(idx) {
   $('#detailTitle').textContent = `${p.isHome ? '📍' : flag(p.cc)} ${p.name}`;
   $('#detailSub').textContent = p.isHome ? 'Your location' : `${Math.round(p.dist)} km ${p.dir} of you`;
   $('#directionsLink').href = `https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lon}`;
+  let hourly = null;   // hour-by-hour forecast, once loaded: each row then shows its hours' icons
   const renderRows = () => {
-    $('#detailRows').innerHTML = r.days.map((d, i) => `
+    if (state.detail?.place !== p) return;   // the sheet moved on to another town meanwhile
+    $('#detailRows').innerHTML = r.days.map((d, i) => {
+      const icons = (hourly && dayIcons(hourly, d, r.kinds[i])) || [[ICON[r.kinds[i]], LABEL[r.kinds[i]]]];
+      const desc = esc(icons.map(([, l], k) => k ? l.toLowerCase() : l).join(', then '));
+      return `
       <li class="row ${r.kinds[i]}${i >= 5 ? ' far' : ''}" data-day="${i}">
         <span class="row-day">${esc(dayLabel(d))}</span>
-        <span class="row-icon">${ICON[r.kinds[i]]}</span>
-        <span class="row-label">${LABEL[r.kinds[i]]}</span>
+        <span class="row-icons" title="${desc}" aria-label="${desc}">${icons.map(([ic]) => `<span>${ic}</span>`).join('')}</span>
         <span class="row-temp">${d.tmax != null ? Math.round(d.tmax) + '°' : ''}<small>${d.tmin != null ? ' ' + Math.round(d.tmin) + '°' : ''}</small></span>
         <span class="row-more">›</span>
-      </li>`).join('');
+      </li>`;
+    }).join('');
   };
   state.detail = { place: p, get days() { return r.days; }, get kinds() { return r.kinds; } };
   renderRows();
   $('#detail').showModal();
-  if (state.ens[pi] || state.ensMode !== 'done') return;
-  // This town wasn't double-checked yet: do it now.
-  fetchEnsembleBatch([p])
-    .then(([ens]) => {
-      state.ens[pi] = ens;
-      saveCache();
-      r = analyze(p, r.days, ens, state.settings, pi);
-      renderRows();
-      render();
+  const needEns = !state.ens[pi] && state.ensMode === 'done';
+  const useEns = ens => {
+    state.ens[pi] = ens;
+    saveCache();
+    r = analyze(p, r.days, ens, state.settings, pi);
+    renderRows();
+    render();
+  };
+  // The hour-by-hour forecast also carries the 51 scenarios, so a town that wasn't double-checked
+  // yet gets checked from the same download. It is cached, so tapping a day then opens instantly.
+  fetchHourly(p)
+    .then(res => {
+      hourly = res;
+      if (needEns && res.ens) useEns(res.ens);
+      else renderRows();
+      if (needEns && !res.ens) return fetchEnsembleBatch([p]).then(([ens]) => ens && useEns(ens));
     })
+    .catch(() => needEns && fetchEnsembleBatch([p]).then(([ens]) => ens && useEns(ens)))
     .catch(() => {});
 }
+
+// The conditions a day goes through between DAY_HOURS (the hours its verdict is based on), as
+// [icon, label] in the order they first appear, e.g. ☁️ ⛅ 🌤️ for a grey morning that clears.
+// Today only counts the hours still to come, like the daily verdict. null = no hourly data.
+function dayIcons({ hours, offset }, day, kind) {
+  const inDay = hours.filter(h => {
+    const hour = +h.time.slice(11, 13);
+    return h.time.startsWith(day.date) && h.isDay && hour >= DAY_HOURS[0] && hour <= DAY_HOURS[1];
+  });
+  const nowHour = localHour(offset);
+  const left = inDay.filter(h => +h.time.slice(11, 13) >= nowHour);
+  const use = day.date === localDate(offset) && left.length >= 3 ? left : inDay;
+  if (!use.length) return null;
+  const out = [];
+  for (const h of use) {
+    const c = hourCondition(h);
+    if (!out.some(([ic]) => ic === c[0])) out.push(c);
+  }
+  // A rainy day whose rain falls outside these hours still shows it.
+  if ((kind === 'rain' || kind === 'snow') && !out.some(([ic]) => WET_ICONS.has(ic))) out.push([ICON[kind], LABEL[kind]]);
+  return out.slice(0, 4);
+}
+const WET_ICONS = new Set(['🌧️', '🌦️', '⛈️', '🌨️']);
 
 // ---------- Hour-by-hour sheet ----------
 // Sun chance per hour blends three independent forecasts: the 51 ECMWF scenarios (share with the
@@ -579,7 +615,8 @@ async function fetchHourly(p, onWait) {
       cloud: main.cloud?.[i], sunChance, rainChance: main.prob?.[i],
     };
   });
-  const result = { ts: Date.now(), hours, ensemble: !!eh, offset, day: localDate(offset) };
+  const ens = eh ? parseEnsemble(eh, ensRes.utc_offset_seconds) : null;
+  const result = { ts: Date.now(), hours, ensemble: !!eh, ens, offset, day: localDate(offset) };
   if (eh) hourCache.set(key, result);   // don't cache a fallback result; retry next time
   return result;
 }

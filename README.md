@@ -14,6 +14,8 @@ for the next days, so you can see where to travel for sun.
   and sort by closest / longest sun / most sunny days / soonest.
 - Map view coloured by length of the sunny spell.
 - Tap a day to see it **hour by hour** (condition, temperature, chance of sun and rain).
+  Each day in a town's list shows the icons its daytime hours go through (e.g. ☁️ ⛅ 🌤️ for a grey
+  morning that clears), so a "Cloudy" day with a sunny afternoon is visible at a glance.
 - **45-day forecast** for any place from ECMWF's extended-range ensemble (51 scenarios); beyond two
   weeks it shows the likely trend rather than pretending to know the exact day.
 
