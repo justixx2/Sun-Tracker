@@ -3,7 +3,8 @@
 A phone app (installable web app / PWA) that shows the **closest towns with sunny weather** around you
 for the next days, so you can see where to travel for sun.
 
-- Uses your phone's location (or a town you pick).
+- Uses your phone's location (or a town or village you pick). Your own spot is named after the village
+  you are in (from OpenStreetMap), and the town search also finds villages (Open-Meteo place search).
 - Checks the forecast in ~250 towns spread evenly around you (towns with 5,000+ people, from GeoNames),
   up to 2,500 km away.
 - 16-day daily forecast per town: sunshine hours, chance of rain, temperatures.

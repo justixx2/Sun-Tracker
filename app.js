@@ -4,6 +4,8 @@
 const FORECAST_API = 'https://api.open-meteo.com/v1/forecast';
 const ENSEMBLE_API = 'https://ensemble-api.open-meteo.com/v1/ensemble';
 const SEASONAL_API = 'https://seasonal-api.open-meteo.com/v1/seasonal';
+const GEOCODE_API = 'https://geocoding-api.open-meteo.com/v1/search';   // finds villages too
+const REVERSE_API = 'https://nominatim.openstreetmap.org/reverse';       // names the village you're in
 const LONG_DAYS = 45;        // ECMWF extended-range (EC46) ensemble, 51 scenarios
 const DAILY_VARS = [
   'weather_code', 'temperature_2m_max', 'temperature_2m_min', 'sunshine_duration',
@@ -388,7 +390,9 @@ function cardHtml(r, idx) {
 
 function render() {
   if (!state.forecasts.length) return;
-  const s = state.settings;
+  const s = state.settings, hp = state.places[0], o = state.origin;
+  // The village name can arrive after the forecast (see nameOrigin).
+  if (hp?.isHome && o && hp.lat === o.lat && hp.lon === o.lon) { hp.name = o.label; hp.cc = o.cc || ''; }
   const all = state.places.map((p, i) => state.forecasts[i] ? analyze(p, state.forecasts[i], state.ens[i], s, i) : null).filter(Boolean);
   const home = all.find(r => r.place.isHome);
   const others = all.filter(r => !r.place.isHome);
@@ -760,12 +764,44 @@ function labelFor(point) {
   return { label: (near.dist > 8 ? 'Near ' : '') + near.city.name, cc: near.city.cc };
 }
 
+// The town list only has towns of 5,000+ people, so a village would show as "Near <town>".
+// OpenStreetMap knows every village: ask it once per spot (about 1 km) and remember the answer.
+async function placeName(point) {
+  const key = `${point.lat.toFixed(2)},${point.lon.toFixed(2)}`;
+  const names = store.get('placeNames', {});
+  if (names[key]) return names[key];
+  const params = new URLSearchParams({
+    format: 'jsonv2', lat: point.lat.toFixed(5), lon: point.lon.toFixed(5), zoom: '14',
+    'accept-language': navigator.language || 'en',
+  });
+  const res = await fetch(`${REVERSE_API}?${params}`);
+  if (!res.ok) return null;
+  const a = (await res.json()).address || {};
+  const label = a.village || a.town || a.city || a.hamlet || a.suburb;
+  if (!label) return null;
+  const named = { label, cc: (a.country_code || '').toUpperCase() };
+  store.set('placeNames', Object.fromEntries([...Object.entries(names).slice(-30), [key, named]]));
+  return named;
+}
+
+function nameOrigin(origin) {
+  placeName(origin).then(named => {
+    if (!named || state.origin !== origin) return;   // moved on to another location meanwhile
+    origin.label = named.label;
+    origin.cc = named.cc || origin.cc;
+    store.set('origin', origin);
+    render();
+    updateLocationText();
+  }).catch(() => { /* keep the nearest-town name */ });
+}
+
 async function setOrigin(point, source) {
   await loadCities();
   const { label, cc } = point.label ? point : labelFor(point);
   state.origin = { lat: point.lat, lon: point.lon, label, cc, source };
   store.set('origin', state.origin);
   updateLocationText();
+  if (!point.label) nameOrigin(state.origin);
 }
 
 // ---------- Main flow ----------
@@ -872,6 +908,16 @@ function searchPlaces(q) {
   return out;
 }
 
+async function searchPlacesOnline(q) {
+  const params = new URLSearchParams({ name: q.trim(), count: '10', language: (navigator.language || 'en').slice(0, 2), format: 'json' });
+  const res = await fetch(`${GEOCODE_API}?${params}`);
+  if (!res.ok) return [];
+  return ((await res.json()).results || []).map(r => ({
+    name: r.name, cc: r.country_code || '', lat: r.latitude, lon: r.longitude,
+    pop: r.population || 0, area: r.admin2 || r.admin1 || '',
+  }));
+}
+
 function bindUi() {
   for (const id of Object.keys(DEFAULTS)) {
     const el = $('#' + id);
@@ -912,17 +958,32 @@ function bindUi() {
     $('#locationDialog').close();
     locateAndRefresh(true);
   });
+  let searchTimer = null;
   $('#placeSearch').addEventListener('input', async e => {
     await loadCities();
-    const results = searchPlaces(e.target.value);
-    $('#placeResults').innerHTML = results.map((c, i) =>
-      `<li data-i="${i}">${flag(c.cc)} ${esc(c.name)} <small>${esc(c.cc)} · pop. ${c.pop.toLocaleString()}</small></li>`).join('');
+    const q = e.target.value;
+    let results = searchPlaces(q);
+    const show = () => {
+      $('#placeResults').innerHTML = results.map((c, i) =>
+        `<li data-i="${i}">${flag(c.cc)} ${esc(c.name)} <small>${esc([c.cc, c.area, c.pop ? 'pop. ' + c.pop.toLocaleString() : ''].filter(Boolean).join(' · '))}</small></li>`).join('');
+    };
+    show();
     $('#placeResults').onclick = ev => {
       const li = ev.target.closest('li'); if (!li) return;
       const c = results[+li.dataset.i];
       $('#locationDialog').close();
       setOrigin({ lat: c.lat, lon: c.lon, label: c.name, cc: c.cc }, 'manual').then(() => refresh());
     };
+    // Villages aren't in the built-in town list: also ask the online place search.
+    clearTimeout(searchTimer);
+    if (q.trim().length < 3) return;
+    searchTimer = setTimeout(async () => {
+      const online = await searchPlacesOnline(q).catch(() => []);
+      if ($('#placeSearch').value !== q) return;   // the user kept typing
+      const isNew = c => !results.some(r => r.name === c.name && distanceKm(r, c) < 10);
+      results = [...results, ...online.filter(isNew)].slice(0, 15);
+      show();
+    }, 350);
   });
 }
 
