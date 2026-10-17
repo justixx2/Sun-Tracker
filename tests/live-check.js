@@ -11,12 +11,17 @@ const LAT = +(process.env.LAT || 50.06), LON = +(process.env.LON || 19.94);
     viewport: { width: 390, height: 844 },
     geolocation: { latitude: LAT, longitude: LON }, permissions: ['geolocation'],
   });
+  // RADIUS=2500 starts with that distance setting, like a phone that has it saved.
+  if (process.env.RADIUS) await ctx.addInitScript(r => localStorage.setItem('settings', JSON.stringify({ radius: r })), process.env.RADIUS);
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
   let apiCalls = 0, apiFailures = 0;
   page.on('response', r => {
-    if (r.url().includes('open-meteo.com')) { apiCalls++; if (!r.ok()) apiFailures++; }
+    if (r.url().includes('open-meteo.com')) {
+      apiCalls++;
+      if (!r.ok()) { apiFailures++; r.text().then(t => console.log(`API ${r.status()} ${new URL(r.url()).host}: ${t.slice(0, 200)}`)).catch(() => {}); }
+    }
   });
 
   await page.goto('http://localhost:8765/');
