@@ -1,7 +1,7 @@
 'use strict';
 
 // ---------- Config ----------
-const APP_VERSION = 22;      // shown at the bottom of the page; keep in step with CACHE in sw.js
+const APP_VERSION = 23;      // shown at the bottom of the page; keep in step with CACHE in sw.js
 const FORECAST_API = 'https://api.open-meteo.com/v1/forecast';
 const ENSEMBLE_API = 'https://ensemble-api.open-meteo.com/v1/ensemble';
 const SEASONAL_API = 'https://seasonal-api.open-meteo.com/v1/seasonal';
@@ -187,9 +187,10 @@ function logNet(msg) {
   netLog.push(`${new Date().toTimeString().slice(0, 8)} ${msg}`);
   if (netLog.length > 40) netLog.shift();
 }
-// An error meaning "the service refused this request" (rate limit or no answer at all), as
-// opposed to a bad request. limit = 'daily' / 'hourly' when the service said so.
-const refusal = (msg, limit = '') => Object.assign(new Error(msg), { refused: true, limit });
+// An error meaning "the service refused this request" (rate limit, overloaded, or no answer at
+// all), as opposed to a bad request. limit = 'daily' / 'hourly' when the service said so;
+// busy = the service is overloaded (5xx), which usually passes within seconds.
+const refusal = (msg, limit = '', busy = false) => Object.assign(new Error(msg), { refused: true, limit, busy });
 
 // Fetches JSON for many locations at once. If Open-Meteo's per-minute limit is hit,
 // waits a minute and tries once more (wait = false: fails at once, for loadInPieces).
@@ -220,13 +221,19 @@ async function fetchMulti(api, batch, extra, onWait, wait = true) {
     try { reason = (await res.json()).reason || ''; } catch { /* ignore */ }
     logNet(`${new URL(api).host} ×${batch.length}: ${res.status} ${reason}`);
     const limit = /daily/i.test(reason) ? 'daily' : /hourly/i.test(reason) ? 'hourly' : '';
+    const busy = res.status >= 500;
     if (res.status === 429 && attempt === 0 && !limit && wait) {
       onWait?.();
       await sleep(61000);
       continue;
     }
+    if (busy && attempt < 2 && wait) {   // overloaded: try again after a short pause
+      onWait?.('busy');
+      await sleep(attempt ? 12000 : 4000);
+      continue;
+    }
     const msg = `Weather service error ${res.status}${reason ? ': ' + reason : ''}`;
-    throw res.status === 429 ? refusal(msg, limit) : new Error(msg);
+    throw res.status === 429 || busy ? refusal(msg, limit, busy) : new Error(msg);
   }
 }
 
@@ -236,18 +243,43 @@ async function fetchMulti(api, batch, extra, onWait, wait = true) {
 // waits a minute once. Places it still can't get come back as null instead of failing everything.
 // run = {waiting, gaveUp, error} is shared by all batches of one load.
 async function loadInPieces(fn, batch, onWait, run) {
-  if (run.gaveUp) return batch.map(() => null);
+  // Nothing at all getting through after many tries: stop instead of hammering the service.
+  if (run.gaveUp || (!run.ok && (run.refusals || 0) >= 20)) return batch.map(() => null);
   try {
-    return await fn(batch, onWait, false);
+    const res = await fn(batch, onWait, false);
+    run.ok = true;
+    return res;
   } catch (e) {
     if (!e.refused) throw e;
     run.error = e;
+    run.refusals = (run.refusals || 0) + 1;
+    if (e.busy) run.busy = true;   // once it says "overloaded", treat silent failures the same way
     if (e.limit) { run.gaveUp = true; return batch.map(() => null); }   // daily/hourly: no use retrying
     if (batch.length > 5) {
+      if (run.busy) onWait?.('busy');
       await sleep(1500);
       const half = Math.ceil(batch.length / 2);
       return [...await loadInPieces(fn, batch.slice(0, half), onWait, run),
         ...await loadInPieces(fn, batch.slice(half), onWait, run)];
+    }
+    if (e.busy || run.busy) {
+      // Overloaded: small requests often get through after a short pause. Keep trying until
+      // this load's deadline, then leave these places out.
+      for (const delay of [5000, 15000, 30000]) {
+        if (Date.now() + delay > run.deadline) break;
+        if (!run.ok && run.refusals >= 20) break;
+        await sleep(delay);
+        try {
+          const res = await fn(batch, onWait, false);
+          run.ok = true;
+          return res;
+        } catch (e3) {
+          if (!e3.refused) throw e3;
+          run.error = e3;
+          run.refusals++;
+        }
+      }
+      return batch.map(() => null);
     }
     if (!run.waiting) { onWait?.(); run.waiting = sleep(61000); }
     await run.waiting;
@@ -301,7 +333,7 @@ function pickForEnsemble(places, forecasts) {
 
 async function fetchEnsembles(places, indices, onProgress, onWait) {
   const out = new Array(places.length).fill(null);
-  const run = {};
+  const run = { deadline: Date.now() + 60000 };
   for (let b = 0; b < indices.length; b += ENS_BATCH) {
     const idx = indices.slice(b, b + ENS_BATCH);
     const res = await loadInPieces(fetchEnsembleBatch, idx.map(i => places[i]), onWait, run);
@@ -316,7 +348,7 @@ async function fetchForecasts(places, onProgress, onWait) {
   const batches = [];
   for (let i = 0; i < places.length; i += BATCH_SIZE) batches.push(places.slice(i, i + BATCH_SIZE));
   const out = new Array(batches.length);
-  const run = {};
+  const run = { deadline: Date.now() + 120000 };
   let next = 0, done = 0;
   async function worker() {
     while (next < batches.length) {
@@ -328,6 +360,7 @@ async function fetchForecasts(places, onProgress, onWait) {
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, batches.length) }, worker));
   const all = out.flat();
   if (!all.some(Boolean)) throw run.error || new Error('No weather data');
+  all.refusal = run.error;   // why some places are missing, if any are
   return all;
 }
 
@@ -716,7 +749,9 @@ async function openHours(dayIdx) {
     }).join('') || '<li class="muted">No hourly data for this day.</li>';
     if (!ensemble) $('#hoursNote').textContent = '⚠️ The 51-scenario forecast is busy right now – sun chances are from two models only. Try again in a minute.';
   } catch (e) {
-    $('#hourRows').innerHTML = /429/.test(e.message)
+    $('#hourRows').innerHTML = e.busy
+      ? '<li class="muted">The weather service (Open-Meteo) is overloaded right now. Please try again in a few minutes.</li>'
+      : /429/.test(e.message)
       ? '<li class="muted">The weather service is busy right now. Please try again in a minute.</li>'
       : `<li class="muted">Couldn't load hourly forecast (${esc(e.message)}).</li>`;
   }
@@ -738,7 +773,7 @@ async function fetchLongRange(p, onWait) {
       if (j?.daily) { daily = j.daily; break; }
     } catch (e) {
       lastErr = e;
-      if (/429/.test(e.message)) break;   // service busy: don't queue another minute-long wait
+      if (/429/.test(e.message) || e.busy) break;   // service busy: don't queue another long wait
     }
   }
   if (!daily) throw lastErr || new Error('no data');
@@ -798,7 +833,9 @@ async function openLongRange() {
     });
     $('#longRows').innerHTML = html;
   } catch (e) {
-    $('#longRows').innerHTML = /429/.test(e.message)
+    $('#longRows').innerHTML = e.busy
+      ? '<li class="muted">The weather service (Open-Meteo) is overloaded right now. Please try again in a few minutes.</li>'
+      : /429/.test(e.message)
       ? '<li class="muted">The weather service is busy right now. Please try again in a minute.</li>'
       : `<li class="muted">Couldn't load the 45-day outlook (${esc(e.message)}).</li>`;
   }
@@ -897,7 +934,9 @@ async function refresh({ force = false } = {}) {
     const places = selectPlaces(state.origin, +state.settings.radius);
     const progress = (label, done, total) => setStatus(
       `${label}<div class="progress"><div style="width:${Math.round(100 * done / total)}%"></div></div>`);
-    const onWait = () => setStatus('⏳ Weather service is busy – continuing in 1 minute…');
+    const onWait = kind => setStatus(kind === 'busy'
+      ? '⏳ The weather service (Open-Meteo) is overloaded right now – retrying in smaller pieces…'
+      : '⏳ Weather service is busy – continuing in 1 minute…');
     progress(`Checking the weather in ${places.length} towns…`, 0, 1);
     const forecasts = await fetchForecasts(places,
       (done, total) => progress(`Checking the weather in ${places.length} towns…`, done, total), onWait);
@@ -916,8 +955,8 @@ async function refresh({ force = false } = {}) {
       if (cacheKey() !== key) return;
       state.ens = ens;
       state.ensMode = 'done';
-      setStatus(missing ? `⚠️ The weather service refused part of the requests, so ${missing} of ${places.length} towns ` +
-        `couldn't be checked. Press ↻ later to try again.${detailsHtml()}` : '');
+      setStatus(missing ? `⚠️ The weather service ${forecasts.refusal?.busy ? 'is overloaded right now' : 'refused part of the requests'}, ` +
+        `so ${missing} of ${places.length} towns couldn't be checked. Press ↻ later to try again.${detailsHtml()}` : '');
     } catch (e) {
       console.error(e);
       state.ensMode = 'failed';
@@ -929,6 +968,7 @@ async function refresh({ force = false } = {}) {
     console.error(e);
     const msg = /daily/i.test(e.message) ? 'The weather service\'s free daily limit is used up for this internet connection'
       : /hourly/i.test(e.message) ? 'The weather service\'s free hourly limit is used up – please try again within an hour'
+      : e.busy ? 'The weather service (Open-Meteo) is overloaded right now – please try again in a few minutes'
       : /429: the weather service is busy/.test(e.message) ? 'Couldn\'t load the weather'   // no answer at all: see diagnose()
       : /429/.test(e.message) ? 'The weather service is busy – please try again in a minute'
       : /fetch/i.test(e.message) ? 'Could not reach the weather service' : (e.message || 'Something went wrong');
