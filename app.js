@@ -859,10 +859,15 @@ async function refresh({ force = false } = {}) {
     render();
   } catch (e) {
     console.error(e);
-    const msg = /429/.test(e.message) ? 'The weather service is busy – please try again in a minute'
+    const msg = /daily/i.test(e.message) ? 'The weather service\'s free daily limit is used up for this internet connection'
+      : /hourly/i.test(e.message) ? 'The weather service\'s free hourly limit is used up – please try again within an hour'
+      : /429: the weather service is busy/.test(e.message) ? 'Couldn\'t load the weather'   // no answer at all: see diagnose()
+      : /429/.test(e.message) ? 'The weather service is busy – please try again in a minute'
       : /fetch/i.test(e.message) ? 'Could not reach the weather service' : (e.message || 'Something went wrong');
     const old = showSavedForecast();
-    setStatus(`⚠️ ${esc(msg)}.${old ? ` Showing the forecast saved ${esc(old)}.` : ''} <button class="btn ghost" id="retryBtn">Retry</button>`, 'error');
+    setStatus(`⚠️ ${esc(msg)}.${old ? ` Showing the forecast saved ${esc(old)}.` : ''} <button class="btn ghost" id="retryBtn">Retry</button>` +
+      `<small class="why" id="whyFailed">Checking why…</small>`, 'error');
+    diagnose(e).then(why => { const el = $('#whyFailed'); if (el) el.textContent = why; });
     $('#retryBtn')?.addEventListener('click', () => refresh({ force: true }));
   } finally {
     state.loading = false;
@@ -870,6 +875,29 @@ async function refresh({ force = false } = {}) {
     const queued = state.queued;
     state.queued = null;
     if (queued) refresh(queued);
+  }
+}
+
+// Finds out why a load failed, in words the user can act on. Open-Meteo's refusals carry no
+// CORS headers, so the browser only reports "failed to fetch": a tiny test request, retried in
+// no-cors mode, tells "the service answered but refused" apart from "nothing got through".
+async function diagnose(e) {
+  const detail = /\d{3}: (?!the weather service is busy)/.test(e.message) ? ` (${e.message})` : '';
+  const url = `${FORECAST_API}?latitude=54.69&longitude=25.28&current=temperature_2m`;
+  try {
+    const res = await fetch(url, { cache: 'no-store' });
+    if (res.ok) return `A small test request works, so the weather service refused only the full check (about 300 towns) – probably its per-minute limit. Wait a minute and press Retry.${detail}`;
+    let reason = '';
+    try { reason = (await res.json()).reason || ''; } catch { /* ignore */ }
+    return `The weather service answered: ${res.status}${reason ? ' – ' + reason.replace(/\.$/, '') : ''}.`;
+  } catch {
+    try {
+      await fetch(url, { mode: 'no-cors', cache: 'no-store' });
+      return 'The weather service (Open-Meteo) answers but refuses this internet connection – most likely its free daily limit, which everyone on the same mobile network shares. Try Wi-Fi, or wait until tomorrow.' + detail;
+    } catch {
+      return navigator.onLine === false ? 'Your phone seems to be offline.'
+        : 'Nothing gets through to the weather service (open-meteo.com) – an ad blocker, Private DNS or VPN on this phone may be blocking it.' + detail;
+    }
   }
 }
 
