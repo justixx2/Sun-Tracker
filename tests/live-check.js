@@ -24,7 +24,8 @@ const LAT = +(process.env.LAT || 50.06), LON = +(process.env.LON || 19.94);
     }
   });
 
-  await page.goto('http://localhost:8765/');
+  await page.goto(process.env.URL || 'http://localhost:8765/');   // URL=the deployed site, to test what phones get
+  if (await page.$('#appVersion')) console.log(await page.textContent('#appVersion'));
   // Wait until both steps (forecast + double-check) are done, or an error is shown.
   await page.waitForFunction(() => (document.querySelector('#status').hidden && document.querySelector('#homeCard .card')) ||
     document.querySelector('.status.error'), null, { timeout: 180000 });

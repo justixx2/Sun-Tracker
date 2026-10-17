@@ -8,6 +8,7 @@ on:
       lat: { description: 'Latitude (default Kraków)', required: false }
       lon: { description: 'Longitude', required: false }
       radius: { description: 'Distance setting in km (default 700)', required: false }
+      url: { description: 'Test this deployed site instead of the checked-out files', required: false }
 
 jobs:
   live-check:
@@ -23,6 +24,7 @@ jobs:
           LAT: ${{ inputs.lat }}
           LON: ${{ inputs.lon }}
           RADIUS: ${{ inputs.radius }}
+          URL: ${{ inputs.url }}
         run: |
           set -o pipefail
           python3 -m http.server 8765 &
