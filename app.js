@@ -1,6 +1,7 @@
 'use strict';
 
 // ---------- Config ----------
+const APP_VERSION = 21;      // shown at the bottom of the page; keep in step with CACHE in sw.js
 const FORECAST_API = 'https://api.open-meteo.com/v1/forecast';
 const ENSEMBLE_API = 'https://ensemble-api.open-meteo.com/v1/ensemble';
 const SEASONAL_API = 'https://seasonal-api.open-meteo.com/v1/seasonal';
@@ -805,6 +806,14 @@ async function setOrigin(point, source) {
 }
 
 // ---------- Main flow ----------
+// The saved forecast, if it is for the current spot and settings and still fresh.
+function freshCache() {
+  const cached = store.get('forecastCache3');
+  const first = cached?.forecasts?.[0]?.[0];
+  const sameDay = first && first.date === localDate(first.offset);
+  return cached && cached.key === cacheKey() && Date.now() - cached.ts < CACHE_TTL_MS && sameDay ? cached : null;
+}
+
 function cacheKey() {
   const o = state.origin;
   return `fc:${o.lat.toFixed(2)},${o.lon.toFixed(2)}:${state.settings.radius}`;
@@ -819,10 +828,8 @@ async function refresh({ force = false } = {}) {
   try {
     await loadCities();
     const key = cacheKey();
-    const cached = store.get('forecastCache3');
-    const first = cached?.forecasts?.[0]?.[0];
-    const sameDay = first && first.date === localDate(first.offset);
-    if (!force && cached && cached.key === key && Date.now() - cached.ts < CACHE_TTL_MS && sameDay) {
+    const cached = freshCache();
+    if (!force && cached) {
       state.places = cached.places; state.forecasts = cached.forecasts; state.fetchedAt = cached.ts;
       state.ens = cached.ens || []; state.ensMode = cached.ensMode || 'failed'; state.cacheKey = key;
       setStatus('');
@@ -925,7 +932,11 @@ async function locateAndRefresh(force = false) {
     const point = await getGps();
     // The user picked a place while we waited for GPS: keep their choice.
     if (!force && state.origin !== before && state.origin?.source === 'manual') return;
-    await setOrigin(point, 'gps');
+    // Phone positions wander by a kilometre or so between fixes. Each new spot means checking
+    // ~300 towns again, which quickly uses up the weather service's free limit, so a fix within
+    // 5 km of the saved spot keeps it (the weather is the same).
+    const same = state.origin?.source === 'gps' && distanceKm(point, state.origin) < 5;
+    if (!same) await setOrigin(point, 'gps');
   } catch (e) {
     if (!state.origin) {
       setStatus(`⚠️ ${esc(e.message)}. <button class="btn ghost" id="pickBtn">Choose a town</button>`, 'error');
@@ -1046,13 +1057,24 @@ function bindUi() {
 
 async function init() {
   bindUi();
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  $('#appVersion').textContent = `App version ${APP_VERSION}`;
+  if ('serviceWorker' in navigator) {
+    // When a new version is installed, switch to it right away instead of on the next start.
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController) location.reload(); });
+    navigator.serviceWorker.register('sw.js').then(reg => reg.update()).catch(() => {});
+  }
   const saved = store.get('origin');
   if (saved) {
     state.origin = saved;
     updateLocationText();
-    await refresh();                        // show cached/saved location instantly
-    if (saved.source === 'gps') locateAndRefresh(); // then update to where we are now
+    if (saved.source !== 'gps') await refresh();
+    else {
+      // Show the saved forecast instantly if it's fresh, then check where we are now. If it's old,
+      // wait for GPS rather than loading ~300 towns for a spot we may have left.
+      if (freshCache()) await refresh();
+      locateAndRefresh();
+    }
   } else {
     locateAndRefresh();
   }

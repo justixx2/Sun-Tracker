@@ -1,5 +1,5 @@
 // Caches the app shell so it opens instantly (and offline). Weather data is cached by the app itself.
-const CACHE = 'sun-tracker-v20';
+const CACHE = 'sun-tracker-v21';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'data/cities.tsv',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png'];
 
@@ -18,7 +18,9 @@ self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
   // Network first so updates show up, falling back to the cache when offline.
   e.respondWith(
-    fetch(e.request)
+    // no-cache: always ask the server whether a file changed, so a new version shows at once.
+    // (By URL: a page-navigation request can't be re-fetched with other options.)
+    fetch(e.request.url, { cache: 'no-cache' })
       .then(res => {
         if (res.ok) { const copy = res.clone(); caches.open(CACHE).then(c => c.put(e.request, copy)); }
         return res;
