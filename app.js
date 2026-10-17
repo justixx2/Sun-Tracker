@@ -811,7 +811,9 @@ function cacheKey() {
 }
 
 async function refresh({ force = false } = {}) {
-  if (state.loading || !state.origin) return;
+  if (!state.origin) return;
+  // A new place picked while still loading: load it as soon as the current load ends.
+  if (state.loading) { state.queued = { force: force || !!state.queued?.force }; return; }
   state.loading = true;
   $('#refreshBtn').classList.add('spin');
   try {
@@ -834,6 +836,7 @@ async function refresh({ force = false } = {}) {
     progress(`Checking the weather in ${places.length} towns…`, 0, 1);
     const forecasts = await fetchForecasts(places,
       (done, total) => progress(`Checking the weather in ${places.length} towns…`, done, total), onWait);
+    if (cacheKey() !== key) return;   // the location changed meanwhile; the queued load takes over
     state.places = places; state.forecasts = forecasts; state.fetchedAt = Date.now();
     state.ens = []; state.ensMode = 'pending'; state.cacheKey = key;
     render();
@@ -842,7 +845,9 @@ async function refresh({ force = false } = {}) {
     const ensLabel = `Double-checking sunny days for the ${picks.length} best places…`;
     progress(ensLabel, 0, 1);
     try {
-      state.ens = await fetchEnsembles(places, picks, (done, total) => progress(ensLabel, done, total), onWait);
+      const ens = await fetchEnsembles(places, picks, (done, total) => progress(ensLabel, done, total), onWait);
+      if (cacheKey() !== key) return;
+      state.ens = ens;
       state.ensMode = 'done';
       setStatus('');
     } catch (e) {
@@ -861,13 +866,19 @@ async function refresh({ force = false } = {}) {
   } finally {
     state.loading = false;
     $('#refreshBtn').classList.remove('spin');
+    const queued = state.queued;
+    state.queued = null;
+    if (queued) refresh(queued);
   }
 }
 
 async function locateAndRefresh(force = false) {
   setStatus('Getting your location…');
+  const before = state.origin;
   try {
     const point = await getGps();
+    // The user picked a place while we waited for GPS: keep their choice.
+    if (!force && state.origin !== before && state.origin?.source === 'manual') return;
     await setOrigin(point, 'gps');
   } catch (e) {
     if (!state.origin) {
