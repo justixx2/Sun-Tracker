@@ -95,6 +95,8 @@ main { padding: 12px 16px 24px; max-width: 760px; margin: 0 auto; }
 }
 .status.error { color: #b91c1c; border-color: #fca5a5; }
 .status .why { display: block; margin-top: 8px; color: var(--muted); font-size: 13px; }
+.status details summary { cursor: pointer; }
+.status details pre { white-space: pre-wrap; word-break: break-word; font-size: 11px; margin: 6px 0 0; }
 .progress { height: 4px; background: var(--border); border-radius: 2px; margin-top: 8px; overflow: hidden; }
 .progress > div { height: 100%; background: var(--accent); width: 0; transition: width .3s; }
 

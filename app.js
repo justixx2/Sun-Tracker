@@ -1,7 +1,7 @@
 'use strict';
 
 // ---------- Config ----------
-const APP_VERSION = 21;      // shown at the bottom of the page; keep in step with CACHE in sw.js
+const APP_VERSION = 22;      // shown at the bottom of the page; keep in step with CACHE in sw.js
 const FORECAST_API = 'https://api.open-meteo.com/v1/forecast';
 const ENSEMBLE_API = 'https://ensemble-api.open-meteo.com/v1/ensemble';
 const SEASONAL_API = 'https://seasonal-api.open-meteo.com/v1/seasonal';
@@ -181,9 +181,19 @@ function normalizeDaily(d, h, offset) {
   }));
 }
 
+// What the weather service answered when something went wrong, shown under "Details".
+const netLog = [];
+function logNet(msg) {
+  netLog.push(`${new Date().toTimeString().slice(0, 8)} ${msg}`);
+  if (netLog.length > 40) netLog.shift();
+}
+// An error meaning "the service refused this request" (rate limit or no answer at all), as
+// opposed to a bad request. limit = 'daily' / 'hourly' when the service said so.
+const refusal = (msg, limit = '') => Object.assign(new Error(msg), { refused: true, limit });
+
 // Fetches JSON for many locations at once. If Open-Meteo's per-minute limit is hit,
-// waits a minute and tries once more.
-async function fetchMulti(api, batch, extra, onWait) {
+// waits a minute and tries once more (wait = false: fails at once, for loadInPieces).
+async function fetchMulti(api, batch, extra, onWait, wait = true) {
   const params = new URLSearchParams({
     latitude: batch.map(p => p.lat.toFixed(3)).join(','),
     longitude: batch.map(p => p.lon.toFixed(3)).join(','),
@@ -197,9 +207,10 @@ async function fetchMulti(api, batch, extra, onWait) {
     } catch (e) {
       // Open-Meteo's "too many requests" replies carry no CORS headers, so the browser only
       // reports a failed fetch. Treat it like a 429: wait a minute and try once more.
+      logNet(`${new URL(api).host} ×${batch.length}: no answer (${e.message})`);
       if (navigator.onLine === false) throw new Error('You seem to be offline');
-      if (attempt === 0) { onWait?.(); await sleep(61000); continue; }
-      throw new Error('429: the weather service is busy, please try again in a minute');
+      if (attempt === 0 && wait) { onWait?.(); await sleep(61000); continue; }
+      throw refusal('429: the weather service is busy, please try again in a minute');
     }
     if (res.ok) {
       const json = await res.json();
@@ -207,18 +218,54 @@ async function fetchMulti(api, batch, extra, onWait) {
     }
     let reason = '';
     try { reason = (await res.json()).reason || ''; } catch { /* ignore */ }
-    if (res.status === 429 && attempt === 0 && !/daily|hourly/i.test(reason)) {
+    logNet(`${new URL(api).host} ×${batch.length}: ${res.status} ${reason}`);
+    const limit = /daily/i.test(reason) ? 'daily' : /hourly/i.test(reason) ? 'hourly' : '';
+    if (res.status === 429 && attempt === 0 && !limit && wait) {
       onWait?.();
       await sleep(61000);
       continue;
     }
-    throw new Error(`Weather service error ${res.status}${reason ? ': ' + reason : ''}`);
+    const msg = `Weather service error ${res.status}${reason ? ': ' + reason : ''}`;
+    throw res.status === 429 ? refusal(msg, limit) : new Error(msg);
   }
 }
 
-async function fetchBatch(batch, onWait) {
+// Loads a batch of places with fn(places, onWait, wait). If the service refuses (a request for
+// many places can be over the free per-minute allowance while small ones still fit, e.g. on a
+// mobile network shared with other people's apps), it retries in ever smaller pieces, then
+// waits a minute once. Places it still can't get come back as null instead of failing everything.
+// run = {waiting, gaveUp, error} is shared by all batches of one load.
+async function loadInPieces(fn, batch, onWait, run) {
+  if (run.gaveUp) return batch.map(() => null);
+  try {
+    return await fn(batch, onWait, false);
+  } catch (e) {
+    if (!e.refused) throw e;
+    run.error = e;
+    if (e.limit) { run.gaveUp = true; return batch.map(() => null); }   // daily/hourly: no use retrying
+    if (batch.length > 5) {
+      await sleep(1500);
+      const half = Math.ceil(batch.length / 2);
+      return [...await loadInPieces(fn, batch.slice(0, half), onWait, run),
+        ...await loadInPieces(fn, batch.slice(half), onWait, run)];
+    }
+    if (!run.waiting) { onWait?.(); run.waiting = sleep(61000); }
+    await run.waiting;
+    if (run.gaveUp) return batch.map(() => null);
+    try {
+      return await fn(batch, onWait, false);
+    } catch (e2) {
+      if (!e2.refused) throw e2;
+      run.error = e2;
+      run.gaveUp = true;
+      return batch.map(() => null);
+    }
+  }
+}
+
+async function fetchBatch(batch, onWait, wait = true) {
   const arr = await fetchMulti(FORECAST_API, batch,
-    { daily: DAILY_VARS.join(','), hourly: 'cloud_cover,precipitation,precipitation_probability', forecast_days: String(FORECAST_DAYS) }, onWait);
+    { daily: DAILY_VARS.join(','), hourly: 'cloud_cover,precipitation,precipitation_probability', forecast_days: String(FORECAST_DAYS) }, onWait, wait);
   return arr.map(item => item && item.daily ? normalizeDaily(item.daily, item.hourly, item.utc_offset_seconds) : null);
 }
 
@@ -230,9 +277,9 @@ function parseEnsemble(h, offset) {
   return { dates, members: dates.map(d => per.map(m => m[d]).filter(v => v != null)) };
 }
 
-async function fetchEnsembleBatch(batch, onWait) {
+async function fetchEnsembleBatch(batch, onWait, wait = true) {
   const arr = await fetchMulti(ENSEMBLE_API, batch,
-    { hourly: 'cloud_cover', models: 'ecmwf_ifs025', forecast_days: String(ENS_DAYS) }, onWait);
+    { hourly: 'cloud_cover', models: 'ecmwf_ifs025', forecast_days: String(ENS_DAYS) }, onWait, wait);
   return arr.map(item => item && item.hourly ? parseEnsemble(item.hourly, item.utc_offset_seconds) : null);
 }
 
@@ -254,12 +301,14 @@ function pickForEnsemble(places, forecasts) {
 
 async function fetchEnsembles(places, indices, onProgress, onWait) {
   const out = new Array(places.length).fill(null);
+  const run = {};
   for (let b = 0; b < indices.length; b += ENS_BATCH) {
     const idx = indices.slice(b, b + ENS_BATCH);
-    const res = await fetchEnsembleBatch(idx.map(i => places[i]), onWait);
+    const res = await loadInPieces(fetchEnsembleBatch, idx.map(i => places[i]), onWait, run);
     idx.forEach((i, k) => { out[i] = res[k] || null; });
     onProgress(Math.min(b + ENS_BATCH, indices.length), indices.length);
   }
+  if (!out.some(Boolean) && run.error) throw run.error;
   return out;
 }
 
@@ -267,16 +316,19 @@ async function fetchForecasts(places, onProgress, onWait) {
   const batches = [];
   for (let i = 0; i < places.length; i += BATCH_SIZE) batches.push(places.slice(i, i + BATCH_SIZE));
   const out = new Array(batches.length);
+  const run = {};
   let next = 0, done = 0;
   async function worker() {
     while (next < batches.length) {
       const idx = next++;
-      out[idx] = await fetchBatch(batches[idx], onWait);
+      out[idx] = await loadInPieces(fetchBatch, batches[idx], onWait, run);
       onProgress(++done, batches.length);
     }
   }
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, batches.length) }, worker));
-  return out.flat();
+  const all = out.flat();
+  if (!all.some(Boolean)) throw run.error || new Error('No weather data');
+  return all;
 }
 
 // ---------- Analysis ----------
@@ -472,8 +524,13 @@ function saveCache() {
   if (!state.cacheKey) return;
   store.set('forecastCache3', {
     key: state.cacheKey, ts: state.fetchedAt, places: state.places,
-    forecasts: state.forecasts, ens: state.ens, ensMode: state.ensMode,
+    forecasts: state.forecasts, ens: state.ens, ensMode: state.ensMode, partial: !!state.partial,
   });
+}
+
+// The service's answers to failed requests, folded away under the message.
+function detailsHtml() {
+  return netLog.length ? `<details class="why"><summary>Details</summary><pre>${esc(netLog.join('\n'))}</pre></details>` : '';
 }
 
 function openDetail(idx) {
@@ -809,9 +866,10 @@ async function setOrigin(point, source) {
 // The saved forecast, if it is for the current spot and settings and still fresh.
 function freshCache() {
   const cached = store.get('forecastCache3');
-  const first = cached?.forecasts?.[0]?.[0];
+  const first = cached?.forecasts?.find(Boolean)?.[0];
   const sameDay = first && first.date === localDate(first.offset);
-  return cached && cached.key === cacheKey() && Date.now() - cached.ts < CACHE_TTL_MS && sameDay ? cached : null;
+  // A load where some towns were refused isn't reused: the next open tries those towns again.
+  return cached && !cached.partial && cached.key === cacheKey() && Date.now() - cached.ts < CACHE_TTL_MS && sameDay ? cached : null;
 }
 
 function cacheKey() {
@@ -846,6 +904,8 @@ async function refresh({ force = false } = {}) {
     if (cacheKey() !== key) return;   // the location changed meanwhile; the queued load takes over
     state.places = places; state.forecasts = forecasts; state.fetchedAt = Date.now();
     state.ens = []; state.ensMode = 'pending'; state.cacheKey = key;
+    const missing = forecasts.filter(f => !f).length;
+    state.partial = missing > 0;
     render();
 
     const picks = pickForEnsemble(places, forecasts);
@@ -856,7 +916,8 @@ async function refresh({ force = false } = {}) {
       if (cacheKey() !== key) return;
       state.ens = ens;
       state.ensMode = 'done';
-      setStatus('');
+      setStatus(missing ? `⚠️ The weather service refused part of the requests, so ${missing} of ${places.length} towns ` +
+        `couldn't be checked. Press ↻ later to try again.${detailsHtml()}` : '');
     } catch (e) {
       console.error(e);
       state.ensMode = 'failed';
@@ -873,7 +934,7 @@ async function refresh({ force = false } = {}) {
       : /fetch/i.test(e.message) ? 'Could not reach the weather service' : (e.message || 'Something went wrong');
     const old = showSavedForecast();
     setStatus(`⚠️ ${esc(msg)}.${old ? ` Showing the forecast saved ${esc(old)}.` : ''} <button class="btn ghost" id="retryBtn">Retry</button>` +
-      `<small class="why" id="whyFailed">Checking why…</small>`, 'error');
+      `<small class="why" id="whyFailed">Checking why…</small>${detailsHtml()}`, 'error');
     diagnose(e).then(why => { const el = $('#whyFailed'); if (el) el.textContent = why; });
     $('#retryBtn')?.addEventListener('click', () => refresh({ force: true }));
   } finally {
@@ -914,9 +975,9 @@ function showSavedForecast() {
   const cached = store.get('forecastCache3');
   if (!cached || state.cacheKey === cacheKey()) return null;   // already showing this spot's forecast
   if (cached.key.split(':')[1] !== cacheKey().split(':')[1]) return null;
-  const today = localDate(cached.forecasts?.[0]?.[0]?.offset);
+  const today = localDate(cached.forecasts?.find(Boolean)?.[0]?.offset);
   const forecasts = cached.forecasts.map(days => days && days.filter(d => d.date >= today));
-  if (!forecasts[0]?.length) return null;
+  if (!forecasts.some(f => f?.length)) return null;
   state.places = cached.places; state.forecasts = forecasts; state.fetchedAt = cached.ts;
   state.ens = cached.ens || []; state.ensMode = cached.ensMode || 'failed'; state.cacheKey = cached.key;
   render();
