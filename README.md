@@ -21,7 +21,8 @@ for the next days, so you can see where to travel for sun.
   weeks it shows the likely trend rather than pretending to know the exact day.
 
 No account, no API key, no server: weather comes from the free [Open-Meteo](https://open-meteo.com/) API.
-Forecasts are cached for an hour.
+Forecasts are cached for two hours. If the weather service refuses (its free limit is per internet
+connection), the app shows the last forecast it saved for your spot.
 
 ## Put it on your phone
 

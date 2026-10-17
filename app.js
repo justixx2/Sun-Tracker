@@ -15,7 +15,7 @@ const FORECAST_DAYS = 10;
 const TARGET_PLACES = 250;   // how many towns to check per search
 const BATCH_SIZE = 50;       // locations per API request
 const CONCURRENCY = 3;
-const CACHE_TTL_MS = 60 * 60 * 1000;
+const CACHE_TTL_MS = 2 * 60 * 60 * 1000;   // models update every few hours; fewer reloads keep us under the free limit
 // Sunny days are double-checked against the 51 ECMWF ensemble scenarios. Every scenario counts
 // against Open-Meteo's free limit (600 calls/minute), so only the best candidates are checked.
 const ENS_DAYS = 10;
@@ -861,7 +861,8 @@ async function refresh({ force = false } = {}) {
     console.error(e);
     const msg = /429/.test(e.message) ? 'The weather service is busy – please try again in a minute'
       : /fetch/i.test(e.message) ? 'Could not reach the weather service' : (e.message || 'Something went wrong');
-    setStatus(`⚠️ ${esc(msg)}. <button class="btn ghost" id="retryBtn">Retry</button>`, 'error');
+    const old = showSavedForecast();
+    setStatus(`⚠️ ${esc(msg)}.${old ? ` Showing the forecast saved ${esc(old)}.` : ''} <button class="btn ghost" id="retryBtn">Retry</button>`, 'error');
     $('#retryBtn')?.addEventListener('click', () => refresh({ force: true }));
   } finally {
     state.loading = false;
@@ -870,6 +871,23 @@ async function refresh({ force = false } = {}) {
     state.queued = null;
     if (queued) refresh(queued);
   }
+}
+
+// When the weather service can't be reached, show the last forecast saved for this spot (any
+// distance setting) rather than nothing. Returns when it was saved, or null if there is none.
+function showSavedForecast() {
+  const cached = store.get('forecastCache3');
+  if (!cached || state.cacheKey === cacheKey()) return null;   // already showing this spot's forecast
+  if (cached.key.split(':')[1] !== cacheKey().split(':')[1]) return null;
+  const today = localDate(cached.forecasts?.[0]?.[0]?.offset);
+  const forecasts = cached.forecasts.map(days => days && days.filter(d => d.date >= today));
+  if (!forecasts[0]?.length) return null;
+  state.places = cached.places; state.forecasts = forecasts; state.fetchedAt = cached.ts;
+  state.ens = cached.ens || []; state.ensMode = cached.ensMode || 'failed'; state.cacheKey = cached.key;
+  render();
+  const ago = Math.round((Date.now() - cached.ts) / 60000);
+  return ago < 1 ? "just now" : ago < 90 ? `${ago} min ago` : ago < 36 * 60 ? `${Math.round(ago / 60)} h ago`
+    : 'on ' + new Date(cached.ts).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' });
 }
 
 async function locateAndRefresh(force = false) {
